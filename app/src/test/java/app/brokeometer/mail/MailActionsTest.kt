@@ -30,6 +30,26 @@ class MailActionsTest {
     }
 
     @Test
+    fun theListMatchesTheEmailApp() {
+        val a = MailActions
+        // Read in Gmail: read here, and an email left unread here follows.
+        assertEquals(a.MARKED_READ, a.matching(entry(a.NOTIFIED), MailPlace.INBOX_READ))
+        assertEquals(a.MARKED_READ, a.matching(entry(a.KEPT), MailPlace.INBOX_READ))
+        assertEquals(null, a.matching(entry(a.READ_ELSEWHERE), MailPlace.INBOX_READ))
+        // Archiving didn't go through: still in the inbox, read or unread.
+        assertEquals(a.MARKED_READ, a.matching(entry(a.ARCHIVED), MailPlace.INBOX_READ))
+        assertEquals(a.MARKED_UNREAD, a.matching(entry(a.ARCHIVED), MailPlace.INBOX_UNREAD))
+        // Unread again in Gmail.
+        assertEquals(a.MARKED_UNREAD, a.matching(entry(a.MARKED_READ), MailPlace.INBOX_UNREAD))
+        assertEquals(null, a.matching(entry(a.NOTIFIED), MailPlace.INBOX_UNREAD))
+        // Archived or deleted in Gmail: out of Needs you; already done here: left as it is.
+        assertEquals(a.ARCHIVED, a.matching(entry(a.NOTIFIED), MailPlace.ARCHIVED))
+        assertEquals(a.DELETED, a.matching(entry(a.UNDECIDED), MailPlace.GONE))
+        assertEquals(null, a.matching(entry(a.ARCHIVED), MailPlace.ARCHIVED))
+        assertEquals(null, a.matching(entry(a.MARKED_READ), MailPlace.GONE))
+    }
+
+    @Test
     fun onlyInboxEmailsOfferTheSenderChoice() {
         val a = MailActions
         assertTrue(a.inInbox(entry(a.KEPT)))

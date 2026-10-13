@@ -159,6 +159,21 @@ object MailActions {
     fun leftUnread(e: MailLogEntity): Boolean =
         if (e.undone) e.action == ARCHIVED || e.action == SPAM_DELETED else e.action in unreadActions
 
+    /**
+     * What an entry becomes so the list matches the email app, or null when it already does. Read
+     * there: read here. Unread in the inbox there (also when archiving didn't go through): unread here.
+     * Archived or deleted there: out of Needs you.
+     */
+    fun matching(e: MailLogEntity, place: MailPlace): String? {
+        val unread = leftUnread(e)
+        return when (place) {
+            MailPlace.INBOX_UNREAD -> MARKED_UNREAD.takeIf { !unread }
+            MailPlace.INBOX_READ -> MARKED_READ.takeIf { unread || archived(e) }
+            MailPlace.ARCHIVED -> ARCHIVED.takeIf { unread }
+            MailPlace.GONE -> DELETED.takeIf { unread }
+        }
+    }
+
     /** Emails that are in, or went to, the inbox, so their sender can be marked not important. */
     fun inInbox(e: MailLogEntity): Boolean =
         e.fromAddress.isNotEmpty() && (e.folder == MailFolders.INBOX || e.action == NOT_SPAM || e.action == MOVED_FROM_SPAM || e.undone)

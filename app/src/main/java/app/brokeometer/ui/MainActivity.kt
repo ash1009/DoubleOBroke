@@ -86,6 +86,8 @@ class MainActivity : FragmentActivity() {
         (application as BrokeApp).container.vault.appInForeground()
         // The emails you're likely to open next are fetched in the background, so they open straight away.
         (application as BrokeApp).container.mailReader.prefetchRecent()
+        // A quick email check, so the list shows what Gmail and Yahoo Mail show (read or unread there).
+        (application as BrokeApp).container.inboxAgent.onAppOpened()
         if (!locked && leftAt > 0 && System.currentTimeMillis() - leftAt > RELOCK_AFTER_MS && lockWanted()) locked = true
         leftAt = 0
         // Ask once each time the app comes to the front; after a cancel, the Unlock button asks again.

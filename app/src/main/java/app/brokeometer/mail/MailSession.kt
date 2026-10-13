@@ -53,6 +53,9 @@ data class FullEmail(
     val loadsFromWeb: Boolean,
 )
 
+/** Where an email is now, so the app's list can match the email app. */
+enum class MailPlace { INBOX_UNREAD, INBOX_READ, ARCHIVED, GONE }
+
 /** Which folder a cursor belongs to. */
 object MailFolders {
     const val INBOX = "inbox"
@@ -176,6 +179,54 @@ class MailSession(private val store: IMAPStore, private val provider: String, pr
         } finally {
             runCatching { from.close(true) }
         }
+    }
+
+    /**
+     * Where each of these emails is now, by Message-ID, without changing anything. [inboxUids] are
+     * the inbox UIDs the app noted, with the Message-ID each should still have (one that doesn't match
+     * is ignored). [search] are looked for by Message-ID when not found that way (newest first, at most
+     * [MAX_SEARCHES]): in the inbox, then in the archive; one in neither was deleted.
+     */
+    fun places(inboxUids: Map<Long, String>, search: List<String>): Map<String, MailPlace> {
+        val out = HashMap<String, MailPlace>()
+        val notInInbox = ArrayList<String>()
+        val inbox = inbox()
+        inbox.open(Folder.READ_ONLY)
+        try {
+            if (inboxUids.isNotEmpty()) {
+                val found = inbox.getMessagesByUID(inboxUids.keys.sorted().toLongArray()).filterNotNull().toTypedArray()
+                if (found.isNotEmpty()) {
+                    val profile = FetchProfile().apply {
+                        add(FetchProfile.Item.FLAGS)
+                        add(UIDFolder.FetchProfileItem.UID)
+                        add("Message-ID")
+                    }
+                    inbox.fetch(found, profile)
+                    for (m in found) {
+                        val id = (m as? MimeMessage)?.messageID ?: continue
+                        if (inboxUids[inbox.getUID(m)] != id) continue
+                        out[id] = if (m.isSet(Flags.Flag.SEEN)) MailPlace.INBOX_READ else MailPlace.INBOX_UNREAD
+                    }
+                }
+            }
+            for (id in search.filter { it !in out }.distinct().take(MAX_SEARCHES)) {
+                val m = inbox.search(HeaderTerm("Message-ID", id)).firstOrNull()
+                if (m == null) notInInbox += id else out[id] = if (m.isSet(Flags.Flag.SEEN)) MailPlace.INBOX_READ else MailPlace.INBOX_UNREAD
+            }
+        } finally {
+            runCatching { inbox.close(false) }
+        }
+        if (notInInbox.isEmpty()) return out
+        val archive = archive() ?: return out
+        archive.open(Folder.READ_ONLY)
+        try {
+            for (id in notInInbox) {
+                out[id] = if (archive.search(HeaderTerm("Message-ID", id)).isNotEmpty()) MailPlace.ARCHIVED else MailPlace.GONE
+            }
+        } finally {
+            runCatching { archive.close(false) }
+        }
+        return out
     }
 
     /** Puts an archived email back in the inbox, unread. Found by its Message-ID. */
@@ -481,6 +532,9 @@ class MailSession(private val store: IMAPStore, private val provider: String, pr
 
     companion object {
         const val TEXT_LIMIT = 2500
+
+        /** Emails looked for one by one (by Message-ID) in one go. */
+        const val MAX_SEARCHES = 25
         private const val BATCH = 200
         private const val ID_BATCH = 25
     }

@@ -171,7 +171,7 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
             agent.note(null)
             val before = dao.logCount()
             try {
-                inbox.checkAll()
+                inbox.checkAll(matchNow = true)
             } finally {
                 _checking.value = false
             }

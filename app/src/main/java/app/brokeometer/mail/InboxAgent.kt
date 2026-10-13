@@ -100,11 +100,12 @@ class InboxAgent(
     }
 
     /** The regular checks: the inbox every 15 minutes, spam every 3 hours. */
-    suspend fun checkAll(inbox: Boolean = true, spam: Boolean = true) {
+    /** Checks every account. [matchNow] makes the list match the email app straight away, not just every few minutes. */
+    suspend fun checkAll(inbox: Boolean = true, spam: Boolean = true, matchNow: Boolean = false) {
         if (!prefs.mailAgentOn.value) return
         lock.withLock {
             for (account in dao.accounts()) {
-                if (inbox) inbox(account)
+                if (inbox) inbox(account, matchNow)
                 if (spam) spam(account)
             }
             clearAppAlerts()
@@ -130,7 +131,7 @@ class InboxAgent(
         }
     }
 
-    private suspend fun inbox(account: MailAccountEntity): List<MailItem> = withContext(Dispatchers.IO) {
+    private suspend fun inbox(account: MailAccountEntity, matchNow: Boolean = false): List<MailItem> = withContext(Dispatchers.IO) {
         val password = prefs.mailPassword(account.address)
         if (password.isEmpty()) return@withContext emptyList()
         val categories = dao.categories()
@@ -233,8 +234,16 @@ class InboxAgent(
                                 notifier.important(entry(category, MailActions.NOTIFIED, summary).copy(id = id), account)
                             } else {
                                 val archived = runCatching { s.archive(item.uid) }.getOrDefault(false)
-                                if (!archived) runCatching { s.markRead(MailFolders.INBOX, item.uid) }
-                                save(entry(category, MailActions.ARCHIVED, decision.summary))
+                                val read = archived || runCatching { s.markRead(MailFolders.INBOX, item.uid) }.isSuccess
+                                if (!read) {
+                                    // The mailbox didn't take it: left as it is, and tried again on the next check.
+                                    break
+                                }
+                                if (archived) {
+                                    save(entry(category, MailActions.ARCHIVED, decision.summary))
+                                } else {
+                                    save(entry(category, MailActions.MARKED_READ, decision.summary + " It couldn't be archived, so it was marked read in your inbox."))
+                                }
                             }
                             learn(account, item, category)
                             handled += item
@@ -244,6 +253,13 @@ class InboxAgent(
                 }
                 if (items.isEmpty()) lastDone = maxOf(lastDone, next.second)
                 dao.saveCursor(MailCursorEntity(account.id, MailFolders.INBOX, next.first, lastDone))
+                try {
+                    matchEmailApp(account, s, matchNow)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // Tried again on the next check.
+                }
             }
         } catch (e: MailClient.LoginRefused) {
             loginTrouble(account.address)
@@ -258,6 +274,51 @@ class InboxAgent(
         }
         dao.trimLog()
         handled
+    }
+
+    /** When each account's list was last matched with the email app. */
+    private val matchedAt = java.util.concurrent.ConcurrentHashMap<Long, Long>()
+    @Volatile private var openedAt = 0L
+
+    /** The app came to the front: a quick check, so the list matches what the email app shows. */
+    fun onAppOpened() {
+        if (!prefs.mailAgentOn.value) return
+        val now = System.currentTimeMillis()
+        if (now - openedAt < OPEN_CHECK_EVERY_MS) return
+        openedAt = now
+        scope.launch { runCatching { checkAll(inbox = true, spam = false, matchNow = true) } }
+    }
+
+    /**
+     * Makes the list match the email app (Gmail or Yahoo Mail): an email read there shows as read
+     * here, one unread there shows as unread (also one whose archiving didn't go through), and one
+     * archived or deleted there leaves Needs you. Looks at the last [MATCH_DAYS] days and at every
+     * email the list shows as unread. Every few minutes, or straight away when asked.
+     */
+    private suspend fun matchEmailApp(account: MailAccountEntity, s: MailSession, now: Boolean) {
+        val at = System.currentTimeMillis()
+        if (!now && at - (matchedAt[account.id] ?: 0L) < MATCH_EVERY_MS) return
+        matchedAt[account.id] = at
+        val since = at - MATCH_DAYS * 24 * 60 * 60_000L
+        val latest = (dao.inboxLogSince(since) + dao.leftUnread())
+            .filter { it.accountId == account.id && it.messageId != null && !MailActions.binned(it) }
+            // In the inbox, or moved there (out of spam, or put back), not ones still in spam.
+            .filter { it.folder == MailFolders.INBOX || it.undone || it.action == MailActions.NOT_SPAM || it.action == MailActions.MOVED_FROM_SPAM }
+            .groupBy { it.messageId!! }
+            .mapValues { (_, list) -> list.maxBy { it.id } }
+            .values
+        if (latest.isEmpty()) return
+        // Put back in the inbox (Undo, or out of spam) gives an email a new UID, so those are found by Message-ID.
+        val inboxUids = latest.filter { it.folder == MailFolders.INBOX && !it.undone }.associate { it.uid to it.messageId!! }
+        val search = latest.filter { MailActions.leftUnread(it) }.sortedByDescending { it.at }.map { it.messageId!! }
+        val places = s.places(inboxUids, search)
+        for (e in latest) {
+            val place = places[e.messageId] ?: continue
+            val to = MailActions.matching(e, place) ?: continue
+            dao.setLogState(e.id, to, false)
+            // Dealt with in the email app: the agent's own notification for it goes too.
+            if (to != MailActions.MARKED_UNREAD) notifier.cancel(e.id)
+        }
     }
 
     /**
@@ -725,6 +786,13 @@ class InboxAgent(
         private const val WARN_AFTER_REFUSALS = 3
         private const val WARN_AFTER_MS = 30 * 60_000L
         private const val MAX_PER_CHECK = 25
+
+        /** Matching the list with the email app: how often in the background, and how far back. */
+        private const val MATCH_EVERY_MS = 5 * 60_000L
+        private const val MATCH_DAYS = 30L
+
+        /** Opening the app checks at most this often. */
+        private const val OPEN_CHECK_EVERY_MS = 60_000L
         private const val MAX_SPAM_PER_CHECK = 40
         private const val TIDY_CHUNK = 40
         const val QUIET_SUMMARY = "You said this sender isn't important, so it was marked read."
