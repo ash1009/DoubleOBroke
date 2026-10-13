@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Google backup on Android 11 and older. Everything is backed up except keys and phone-only things. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="secrets.xml" />
+    <exclude domain="sharedpref" path="device.xml" />
+    <exclude domain="database" path="androidx.work.workdb" />
+    <exclude domain="database" path="androidx.work.workdb-shm" />
+    <exclude domain="database" path="androidx.work.workdb-wal" />
+        <!-- Where you went stays on this phone. -->
+        <exclude domain="database" path="travel.db" />
+        <exclude domain="database" path="travel.db-shm" />
+        <exclude domain="database" path="travel.db-wal" />
+</full-backup-content>

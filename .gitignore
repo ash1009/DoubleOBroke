@@ -1,0 +1,13 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.kotlin/
+captures/
+.DS_Store
+
+# Never commit signing keys or personal data exports.
+*.jks
+*.keystore
+*.csv
