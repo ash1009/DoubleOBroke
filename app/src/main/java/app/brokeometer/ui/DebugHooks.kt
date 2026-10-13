@@ -2,6 +2,7 @@ package app.brokeometer.ui
 
 import app.brokeometer.travel.StepSampleEntity
 import app.brokeometer.limits.AppLimit
+import app.brokeometer.limits.LimitWatcher
 
 import app.brokeometer.travel.TravelTracker
 import app.brokeometer.travel.TrackPointEntity
@@ -100,6 +101,7 @@ object DebugHooks {
         if (intent.hasExtra("limits_fast")) app.container.limits.fast = intent.getBooleanExtra("limits_fast", false)
         intent.getStringExtra("limits_add")?.split(',')?.takeIf { it.size == 3 }?.let { (pkg, label, minutes) ->
             app.container.limits.setNow(AppLimit(pkg, label, minutes.toInt()))
+            LimitWatcher.sync(app)
         }
         intent.getStringExtra("attach_test")?.let { name ->
             pendingAttach = android.net.Uri.fromFile(File(app.getExternalFilesDir(null), name))

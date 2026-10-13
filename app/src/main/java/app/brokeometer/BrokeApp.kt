@@ -8,6 +8,7 @@ import app.brokeometer.capture.Notifier
 import app.brokeometer.capture.NudgeWatcher
 import app.brokeometer.capture.VoiceAdder
 import app.brokeometer.limits.LimitStore
+import app.brokeometer.limits.LimitWatcher
 import app.brokeometer.limits.UsageReader
 import app.brokeometer.travel.TravelAgent
 import app.brokeometer.travel.TravelCheckWorker
@@ -56,6 +57,8 @@ class BrokeApp : Application() {
             TravelTracker.sync(this)
             TravelCheckWorker.schedule(this)
         }
+        // App limits carries on watching (Android may not allow starting it from here; it's tried again on opening the app).
+        runCatching { LimitWatcher.sync(this) }
     }
 }
 

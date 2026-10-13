@@ -8,8 +8,8 @@ import org.json.JSONObject
 import java.time.LocalDate
 
 /**
- * What App limits keeps: the apps and their limits, its own settings, and today's way outs and
- * warnings. Changes that loosen anything wait for the next day ([Change]); [refresh] lets them take
+ * What App limits keeps: the apps and their limits, whether it's on, and today's way outs and
+ * warnings. Changes that loosen a limit wait for the next day ([Change]); [refresh] lets them take
  * over once their day comes.
  */
 class LimitStore(context: Context) {
@@ -23,22 +23,6 @@ class LimitStore(context: Context) {
     private val _on = MutableStateFlow(sp.getBoolean(KEY_ON, true))
     /** Whether App limits is on. Turning it off takes [LimitRules.TURN_OFF_WAIT] minutes. */
     val on: StateFlow<Boolean> = _on
-
-    private val _chatsFromNotifications = MutableStateFlow(sp.getBoolean(KEY_CHATS, true))
-    /** After Instagram's limit, a message notification opens that chat (and only chats). */
-    val chatsFromNotifications: StateFlow<Boolean> = _chatsFromNotifications
-
-    private val _messagesButton = MutableStateFlow(sp.getBoolean(KEY_BUTTON, false))
-    /** After Instagram's limit, the block screen has a Messages only button. */
-    val messagesButton: StateFlow<Boolean> = _messagesButton
-
-    private val _waiting = MutableStateFlow(readWaiting())
-    /** Settings turned on that start on a later day: key to the day. */
-    val waiting: StateFlow<Map<String, String>> = _waiting
-
-    private val _recording = MutableStateFlow(sp.getBoolean(KEY_RECORD, false))
-    /** Noting which Instagram screen the app thinks you're on (names only), to tune it. */
-    val recording: StateFlow<Boolean> = _recording
 
     private val _day = MutableStateFlow(readDay())
     /** Today's way outs and warnings. */
@@ -54,11 +38,6 @@ class LimitStore(context: Context) {
     fun refresh(today: LocalDate = LocalDate.now()) {
         val now = _limits.value.mapNotNull { LimitRules.onDay(it, today) }
         if (now != _limits.value) saveLimits(now)
-        val due = _waiting.value.filter { (_, from) -> !LocalDate.parse(from).isAfter(today) }
-        if (due.isNotEmpty()) {
-            due.keys.forEach { key -> setSetting(key, true) }
-            saveWaiting(_waiting.value - due.keys)
-        }
         if (_day.value.day != today.toString()) saveDay(DayState(today.toString()))
     }
 
@@ -76,13 +55,6 @@ class LimitStore(context: Context) {
     @Synchronized
     fun removeNow(pkg: String) {
         saveLimits(_limits.value.filterNot { it.pkg == pkg })
-    }
-
-    /** Sets a setting straight away: turning it off, or anything while App limits is off. */
-    @Synchronized
-    fun settingNow(key: String, on: Boolean) {
-        saveWaiting(_waiting.value - key)
-        setSetting(key, on)
     }
 
     /** Loosens an app's limit, from tomorrow. */
@@ -103,47 +75,9 @@ class LimitStore(context: Context) {
         saveLimits(_limits.value.map { if (it.pkg == pkg) it.copy(warnMinutes = minutes) else it })
     }
 
-    /** Turns a setting off (stricter: straight away) or on (looser: from tomorrow). */
-    @Synchronized
-    fun changeSetting(key: String, on: Boolean) {
-        if (on) {
-            saveWaiting(_waiting.value + (key to LocalDate.now().plusDays(1).toString()))
-        } else {
-            saveWaiting(_waiting.value - key)
-            setSetting(key, false)
-        }
-    }
-
-    /** Whether turning [key] on means waiting a day (and the wait before it). */
-    fun loosens(key: String, on: Boolean): Boolean = on && !setting(key)
-
-    fun setting(key: String): Boolean = when (key) {
-        CHATS -> _chatsFromNotifications.value
-        BUTTON -> _messagesButton.value
-        else -> false
-    }
-
-    private fun setSetting(key: String, value: Boolean) {
-        when (key) {
-            CHATS -> {
-                sp.edit().putBoolean(KEY_CHATS, value).apply()
-                _chatsFromNotifications.value = value
-            }
-            BUTTON -> {
-                sp.edit().putBoolean(KEY_BUTTON, value).apply()
-                _messagesButton.value = value
-            }
-        }
-    }
-
     fun setOn(value: Boolean) {
         sp.edit().putBoolean(KEY_ON, value).apply()
         _on.value = value
-    }
-
-    fun setRecording(value: Boolean) {
-        sp.edit().putBoolean(KEY_RECORD, value).apply()
-        _recording.value = value
     }
 
     /** Minutes added today by the way out for [pkg]. */
@@ -209,18 +143,6 @@ class LimitStore(context: Context) {
         }
     }.getOrDefault(emptyList())
 
-    private fun saveWaiting(map: Map<String, String>) {
-        val o = JSONObject()
-        map.forEach { (k, v) -> o.put(k, v) }
-        sp.edit().putString(KEY_WAITING, o.toString()).apply()
-        _waiting.value = map
-    }
-
-    private fun readWaiting(): Map<String, String> = runCatching {
-        val o = JSONObject(sp.getString(KEY_WAITING, "{}")!!)
-        o.keys().asSequence().associateWith { o.getString(it) }
-    }.getOrDefault(emptyMap())
-
     private fun saveDay(d: DayState) {
         val o = JSONObject()
             .put("day", d.day)
@@ -242,16 +164,8 @@ class LimitStore(context: Context) {
     }.getOrDefault(DayState(LocalDate.now().toString()))
 
     companion object {
-        /** Setting keys for [changeSetting]. */
-        const val CHATS = "chats"
-        const val BUTTON = "button"
-
         private const val KEY_LIMITS = "limits"
         private const val KEY_ON = "on"
-        private const val KEY_CHATS = "chats_from_notifications"
-        private const val KEY_BUTTON = "messages_button"
-        private const val KEY_WAITING = "waiting"
-        private const val KEY_RECORD = "record_instagram"
         private const val KEY_DAY = "day"
     }
 }

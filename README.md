@@ -45,8 +45,8 @@ Each part of the app is an agent that does a job in the background and asks you 
 - A daily limit for any app, with a suggestion based on your usual week.
 - Making limits stricter is instant. Loosening anything only starts the next day, after a wait and typing a sentence word for word. Turning it off is a 30 minute wait.
 - A **way out** on the block screen: wait for 10 more minutes, and the wait doubles each time that day.
-- Built to be hard to get around: an Accessibility service watches for the Settings pages that would stop it, and device admin stops it being uninstalled.
-- **Instagram after its limit**: chats stay open while the feed, Reels, Explore and Stories close. It tells the screens apart by Instagram's view IDs, never by what's written on screen.
+- A small service reads the phone's own record of which app is open (Usage access) about once a second while the screen is on, and puts the block screen over an app once its time is used. Device admin stops it being uninstalled.
+- It deliberately uses no Accessibility: some banking apps (HSBC's among them) refuse to run while an app from outside Google Play has Accessibility switched on.
 
 ### Passwords
 - A vault encrypted on the phone, opened with your fingerprint (or a master password on a new phone).
@@ -60,7 +60,7 @@ flowchart LR
         N[Notifications] --> M[Money agent]
         I[IMAP: Gmail, Yahoo] --> E[Email agent]
         L[Location and steps] --> T[Travel agent]
-        U[Usage stats and Accessibility] --> A[App limits]
+        U[Usage stats] --> A[App limits]
         M & E & T --> DB[(Room database)]
         A --> S[(Limit store)]
         V[Encrypted vault]
@@ -82,7 +82,7 @@ Background work runs on **WorkManager** (nightly trip check, email checks, weekl
 | `insights` | Runway, allowances, patterns, currency conversion |
 | `mail` | IMAP client, inbox agent, prompts, OTP codes, notifications |
 | `travel` | Location tracking, day timeline, trip finding, TfL client, fares |
-| `limits` | Screen time maths, block screen, Accessibility service, device admin |
+| `limits` | Screen time maths, the watcher service, block screen, device admin |
 | `vault` | Encryption and password import |
 | `ui` | ViewModels, screens, components and theme |
 
@@ -116,7 +116,7 @@ Release builds are signed with a key from the environment when one is given (`SI
 
 ## Tests
 
-125 unit tests cover the parts with the most logic: bank message parsing, category guessing, CSV import and backups, trip finding and fares, the day timeline, screen time maths and limit rules, Instagram screen classification, email prompts and actions, and the vault's encryption and import.
+121 unit tests cover the parts with the most logic: bank message parsing, category guessing, CSV import and backups, trip finding and fares, the day timeline, screen time maths and limit rules, email prompts and actions, and the vault's encryption and import.
 
 During development, the app also ran on an Android emulator in CI, which tapped through it with made-up data and saved the screenshots above.
 
@@ -126,4 +126,4 @@ A personal project by [Aashish Biradar](https://aashish-n-biradar.netlify.app), 
 
 Fonts: Bricolage Grotesque and Instrument Sans, under the SIL Open Font License (see `licenses/`).
 
-Not affiliated with HSBC, ICICI Bank, Google, Yahoo, Instagram or Transport for London.
+Not affiliated with HSBC, ICICI Bank, Google, Yahoo or Transport for London.

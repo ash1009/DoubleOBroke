@@ -1,7 +1,5 @@
 package app.brokeometer.capture
 
-import app.brokeometer.limits.InstaScreens
-import app.brokeometer.limits.LimitLive
 import android.app.Notification
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
@@ -37,17 +35,6 @@ class PaymentListenerService : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         if (sbn != null) handle(sbn, replay = false)
-    }
-
-    /** A tapped Instagram message lets you into its chat after the day's limit (App limits). */
-    override fun onNotificationRemoved(sbn: StatusBarNotification?, rankingMap: RankingMap?, reason: Int) {
-        super.onNotificationRemoved(sbn, rankingMap, reason)
-        if (sbn == null || reason != REASON_CLICK || sbn.packageName != InstaScreens.PACKAGE) return
-        val n = sbn.notification
-        val template = n.extras?.getString(android.app.Notification.EXTRA_TEMPLATE)
-        if (InstaScreens.isMessage(n.channelId, n.category, template)) {
-            LimitLive.notificationTapAt = System.currentTimeMillis()
-        }
     }
 
     private fun handle(sbn: StatusBarNotification, replay: Boolean) {

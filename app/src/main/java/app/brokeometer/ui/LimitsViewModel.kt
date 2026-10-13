@@ -10,10 +10,9 @@ import app.brokeometer.limits.AppLimit
 import app.brokeometer.limits.LimitRules
 import app.brokeometer.limits.LimitAdmin
 import app.brokeometer.limits.LimitLive
-import app.brokeometer.limits.LimitService
 import app.brokeometer.limits.LimitStore
+import app.brokeometer.limits.LimitWatcher
 import app.brokeometer.limits.PhoneApp
-import app.brokeometer.limits.Recorder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -21,7 +20,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 
 /** Today's screen time: per app, in total, and each app's usual day. */
 data class ScreenTime(
@@ -37,9 +35,9 @@ data class ScreenTime(
 /** What App limits has been given, and what it still needs. */
 data class LimitPerms(
     val usage: Boolean = false,
-    val accessibility: Boolean = false,
+    /** "Display over other apps", so the block screen can come up over an app. */
+    val overlay: Boolean = false,
     val running: Boolean = false,
-    val notifications: Boolean = false,
     val admin: Boolean = false,
     val battery: Boolean = false,
     val autoTime: Boolean = true,
@@ -57,12 +55,6 @@ sealed interface Hold {
         override val what = if (remove) "Taking $label off your limits" else "Loosening $label's limit"
     }
 
-    data class Setting(val key: String, val label: String) : Hold {
-        override val waitMinutes = LimitRules.LOOSEN_WAIT
-        override val promise = true
-        override val what = "Turning on: $label"
-    }
-
     data object TurnOff : Hold {
         override val waitMinutes = LimitRules.TURN_OFF_WAIT
         override val promise = false
@@ -78,11 +70,7 @@ class LimitsViewModel(application: Application) : AndroidViewModel(application) 
 
     val limits = store.limits
     val on = store.on
-    val chatsFromNotifications = store.chatsFromNotifications
-    val messagesButton = store.messagesButton
-    val waiting = store.waiting
     val day = store.day
-    val recording = store.recording
 
     private val _time = MutableStateFlow<ScreenTime?>(null)
     val time: StateFlow<ScreenTime?> = _time
@@ -106,9 +94,6 @@ class LimitsViewModel(application: Application) : AndroidViewModel(application) 
     /** A line to show once a change is saved. */
     val done: StateFlow<String?> = _done
 
-    private val _recorded = MutableStateFlow(0)
-    val recorded: StateFlow<Int> = _recorded
-
     private var ticking: Job? = null
 
     init {
@@ -118,18 +103,18 @@ class LimitsViewModel(application: Application) : AndroidViewModel(application) 
     fun refresh() {
         store.refresh()
         val ctx = getApplication<Application>()
+        // Starts (or stops) watching, now that permissions may have been given.
+        LimitWatcher.sync(ctx)
         _perms.value = LimitPerms(
             usage = usage.allowed(),
-            accessibility = LimitService.enabled(ctx),
+            overlay = LimitWatcher.overlayAllowed(ctx),
             running = LimitLive.running,
-            notifications = LimitService.notificationsAllowed(ctx),
-            admin = LimitService.adminActive(ctx),
-            battery = LimitService.batteryFree(ctx),
-            autoTime = LimitService.autoTime(ctx),
+            admin = LimitWatcher.adminActive(ctx),
+            battery = LimitWatcher.batteryFree(ctx),
+            autoTime = LimitWatcher.autoTime(ctx),
         )
         viewModelScope.launch {
             _time.value = withContext(Dispatchers.IO) { screenTime() }
-            _recorded.value = withContext(Dispatchers.IO) { Recorder.count(ctx) }
         }
     }
 
@@ -193,6 +178,7 @@ class LimitsViewModel(application: Application) : AndroidViewModel(application) 
         }
         store.setNow(old.copy(minutes = minutes, wayOut = wayOut, warnMinutes = warn))
         _done.value = "$label: ${LimitRules.hmMinutes(minutes)} a day, from now."
+        LimitWatcher.sync(getApplication())
     }
 
     fun remove(limit: AppLimit) {
@@ -201,22 +187,13 @@ class LimitsViewModel(application: Application) : AndroidViewModel(application) 
         } else {
             store.removeNow(limit.pkg)
             _done.value = "${limit.label} is off your limits."
+            LimitWatcher.sync(getApplication())
         }
     }
 
     fun cancelChange(pkg: String) {
         store.cancelChange(pkg)
         _done.value = "Change cancelled."
-    }
-
-    fun setSetting(key: String, label: String, value: Boolean) {
-        // The Messages only button switches straight away, either way (your call, 13 Oct).
-        if (store.loosens(key, value) && on.value && key != LimitStore.BUTTON) {
-            _hold.value = Hold.Setting(key, label)
-            return
-        }
-        // Stricter, or App limits is off: straight away.
-        store.settingNow(key, value)
     }
 
     fun turnOff() {
@@ -226,6 +203,7 @@ class LimitsViewModel(application: Application) : AndroidViewModel(application) 
     fun turnOn() {
         store.setOn(true)
         _done.value = "App limits is on."
+        refresh()
     }
 
     fun waitMsFor(h: Hold): Long = store.waitMs(h.waitMinutes)
@@ -255,10 +233,6 @@ class LimitsViewModel(application: Application) : AndroidViewModel(application) 
                 store.setFromTomorrow(h.pkg, h.minutes, h.wayOut, h.remove)
                 _done.value = if (h.remove) "${h.label} comes off your limits tomorrow." else "From tomorrow, ${h.label} gets ${LimitRules.hmMinutes(h.minutes)} a day."
             }
-            is Hold.Setting -> {
-                store.changeSetting(h.key, true)
-                _done.value = "${h.label}: on from tomorrow."
-            }
             Hold.TurnOff -> {
                 store.setOn(false)
                 // Off means off: the device admin goes too, so the app can be uninstalled.
@@ -276,15 +250,4 @@ class LimitsViewModel(application: Application) : AndroidViewModel(application) 
     fun doneShown() {
         _done.value = null
     }
-
-    fun setRecording(on: Boolean) {
-        store.setRecording(on)
-    }
-
-    fun clearRecording() {
-        Recorder.clear(getApplication<Application>())
-        _recorded.value = 0
-    }
-
-    fun exportRecording(): File? = Recorder.export(getApplication<Application>())
 }

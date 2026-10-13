@@ -11,6 +11,5 @@
     <string name="channel_mail_description">Emails in categories you switched on, read and summed up by the agent.</string>
     <string name="channel_spam">Spam check</string>
     <string name="channel_spam_description">An email in spam that might be something you want.</string>
-    <string name="limits_service_description">App limits: counts your time in the apps you set limits for, and closes them when today\'s time is used. After Instagram\'s limit it can keep chats open and close the rest. It only looks at which app and which screen is open, never what you write, and nothing leaves the phone.</string>
     <string name="limits_admin_description">Stops Double O Broke being uninstalled while App limits is on.</string>
 </resources>

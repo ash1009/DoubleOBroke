@@ -1,7 +1,6 @@
 package app.brokeometer.limits
 
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.view.WindowManager
@@ -51,8 +50,7 @@ import kotlinx.coroutines.delay
 
 /**
  * The block screen, over an app whose time is used up for today. It can offer a way out (wait, and
- * the wait doubles each time, for 10 more minutes) and, for Instagram, Messages only. Leaving the
- * screen during a wait starts it again.
+ * the wait doubles each time, for 10 more minutes). Leaving the screen during a wait starts it again.
  */
 class BlockActivity : ComponentActivity() {
 
@@ -105,23 +103,12 @@ class BlockActivity : ComponentActivity() {
         finish()
     }
 
-    private fun messagesOnly() {
-        LimitLive.messagesOnlyAt = System.currentTimeMillis()
-        val inbox = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.instagram.com/direct/inbox/"))
-            .setPackage(InstaScreens.PACKAGE)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        val opened = runCatching { startActivity(inbox) }.isSuccess
-        if (!opened) packageManager.getLaunchIntentForPackage(InstaScreens.PACKAGE)?.let { startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-        finish()
-    }
-
     @Composable
     private fun BlockScreen(pkg: String, reason: String) {
         val container = (application as BrokeApp).container
         val store = container.limits
         val limits by store.limits.collectAsStateWithLifecycle()
         val day by store.day.collectAsStateWithLifecycle()
-        val button by store.messagesButton.collectAsStateWithLifecycle()
         val limit = limits.firstOrNull { it.pkg == pkg }
         val label = limit?.label ?: container.usage.label(pkg)
         val icon = remember(pkg) { container.usage.icon(pkg)?.asImageBitmap() }
@@ -187,8 +174,6 @@ class BlockActivity : ComponentActivity() {
                 val (title, body) = when (reason) {
                     REASON_CLOCK -> "The phone's clock was changed" to
                         "Turn Automatic date and time back on to use $label. App limits goes by the real time."
-                    REASON_CHATS -> "Only chats are open" to
-                        "After today's limit, $label is chats only. The feed, Reels, Explore and Stories open again at midnight."
                     else -> "$label is done for today" to
                         "You've had your ${LimitRules.hmMinutes((limit?.minutes ?: 0) + (day.extra[pkg] ?: 0))}. It opens again at midnight."
                 }
@@ -203,10 +188,6 @@ class BlockActivity : ComponentActivity() {
                     }, modifier = Modifier.fillMaxWidth())
                     Spacer(Modifier.height(12.dp))
                 } else {
-                    if (pkg == InstaScreens.PACKAGE && button && reason == REASON_LIMIT) {
-                        ActionButton("Open messages only", onClick = { messagesOnly() }, modifier = Modifier.fillMaxWidth())
-                        Spacer(Modifier.height(12.dp))
-                    }
                     if (limit?.wayOut == true) {
                         QuietButton(
                             "Wait $waitMinutes min for 10 more minutes",
@@ -228,7 +209,6 @@ class BlockActivity : ComponentActivity() {
         const val EXTRA_PKG = "pkg"
         const val EXTRA_REASON = "reason"
         const val REASON_LIMIT = "limit"
-        const val REASON_CHATS = "chats"
         const val REASON_CLOCK = "clock"
     }
 }

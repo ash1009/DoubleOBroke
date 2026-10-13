@@ -24,13 +24,16 @@
         tools:ignore="ProtectedPermissions" />
     <!-- App limits: asks to keep running in the background. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- App limits: keeps watching which app is in front, with a small notification. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- App limits: "Display over other apps", so the block screen can come up over an app. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- So a tap on an email notification can open Gmail or Yahoo Mail. -->
     <queries>
         <package android:name="com.google.android.gm" />
         <package android:name="com.yahoo.mobile.client.android.mail" />
         <!-- App limits: the apps you can open, to pick which to limit. -->
-        <package android:name="com.instagram.android" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
@@ -152,19 +155,24 @@
             android:taskAffinity="app.brokeometer.block"
             android:theme="@style/Theme.Broke" />
 
-        <!-- App limits: watches which app is in front (Accessibility). -->
+        <!-- App limits: watches which app is in front, from the phone's own record (Usage access). -->
         <service
-            android:name=".limits.LimitService"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/limits_service" />
+            android:name=".limits.LimitWatcher"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="App limits: checks which app is open (from Usage access) to close apps once their daily time is used." />
         </service>
+
+        <receiver
+            android:name=".limits.LimitBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!-- App limits: device admin, only so the app can't be uninstalled while it's on. -->
         <receiver

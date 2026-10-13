@@ -75,17 +75,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.brokeometer.limits.AppLimit
-import app.brokeometer.limits.InstaScreens
 import app.brokeometer.limits.LimitAdmin
 import app.brokeometer.limits.LimitRules
-import app.brokeometer.limits.LimitService
-import app.brokeometer.limits.LimitStore
+import app.brokeometer.limits.LimitWatcher
 import app.brokeometer.limits.PhoneApp
 import app.brokeometer.ui.Hold
 import app.brokeometer.ui.LimitsViewModel
@@ -102,7 +99,7 @@ private val limitPages = listOf("Today", "Limits", "Setup")
 private data class Editing(val pkg: String, val label: String)
 
 /**
- * App limits: Today (screen time and each limit), Limits (the apps, and Instagram's chats), and Setup
+ * App limits: Today (screen time and each limit), Limits (the apps and their limits), and Setup
  * (on or off, and what it needs from the phone). Swipe between them; swiping right on Today goes back.
  */
 @Composable
@@ -200,7 +197,7 @@ private fun TodayPage(vm: LimitsViewModel, onAdd: () -> Unit, onLimit: (Editing)
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        if (!perms.usage || !perms.accessibility) {
+        if (!perms.usage || !perms.overlay) {
             item("setup") {
                 Card {
                     Text("Not set up yet", style = MaterialTheme.typography.titleMedium)
@@ -302,9 +299,6 @@ private fun waitingLine(l: AppLimit): String? {
 @Composable
 private fun ListPage(vm: LimitsViewModel, onAdd: () -> Unit, onEdit: (Editing) -> Unit) {
     val list by vm.limits.collectAsStateWithLifecycle()
-    val chats by vm.chatsFromNotifications.collectAsStateWithLifecycle()
-    val button by vm.messagesButton.collectAsStateWithLifecycle()
-    val waiting by vm.waiting.collectAsStateWithLifecycle()
     val on by vm.on.collectAsStateWithLifecycle()
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val brand = LocalBrand.current
@@ -341,31 +335,11 @@ private fun ListPage(vm: LimitsViewModel, onAdd: () -> Unit, onEdit: (Editing) -
                 }
             }
         }
-        if (list.any { it.pkg == InstaScreens.PACKAGE }) {
-            item("insta-head") { Heading("Instagram after its limit") }
-            item("insta") {
-                Card {
-                    SettingRow(
-                        "Open chats from message notifications",
-                        "Tapping a message opens that chat. The feed, Reels, Explore and Stories stay closed.",
-                        chats,
-                        waiting[LimitStore.CHATS],
-                    ) { vm.setSetting(LimitStore.CHATS, "Open chats from message notifications", it) }
-                    SettingRow(
-                        "Messages only button",
-                        "On the block screen: opens your chats and nothing else.",
-                        button,
-                        waiting[LimitStore.BUTTON],
-                    ) { vm.setSetting(LimitStore.BUTTON, "Messages only button", it) }
-                    Text("Reels sent in chats stay closed: only text.", style = MaterialTheme.typography.bodySmall, color = muted)
-                }
-            }
-        }
         item("rules") {
             Text(
                 if (on) {
-                    "Making a limit stricter starts now. Loosening one (more time, a way out back on, taking an app off, " +
-                        "or turning on chats from notifications) starts tomorrow, after a ${LimitRules.LOOSEN_WAIT} minute wait and typing a sentence."
+                    "Making a limit stricter starts now. Loosening one (more time, a way out back on, or taking an app off) " +
+                        "starts tomorrow, after a ${LimitRules.LOOSEN_WAIT} minute wait and typing a sentence."
                 } else {
                     "App limits is off, so changes start now."
                 },
@@ -377,35 +351,15 @@ private fun ListPage(vm: LimitsViewModel, onAdd: () -> Unit, onEdit: (Editing) -
     }
 }
 
-@Composable
-private fun SettingRow(title: String, body: String, checked: Boolean, waitingFrom: String?, onChange: (Boolean) -> Unit) {
-    val brand = LocalBrand.current
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f).padding(end = 12.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (waitingFrom != null && !checked) Text("On from tomorrow", style = MaterialTheme.typography.bodySmall, color = brand.careful)
-        }
-        Switch(
-            checked = checked,
-            onCheckedChange = onChange,
-            colors = SwitchDefaults.colors(checkedTrackColor = brand.action, checkedThumbColor = brand.onAction),
-        )
-    }
-}
-
 // Setup
 
 @Composable
 private fun SetupPage(vm: LimitsViewModel) {
     val perms by vm.perms.collectAsStateWithLifecycle()
     val on by vm.on.collectAsStateWithLifecycle()
-    val recording by vm.recording.collectAsStateWithLifecycle()
-    val recorded by vm.recorded.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val admin = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { vm.refresh() }
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val brand = LocalBrand.current
     LazyColumn(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
@@ -416,7 +370,7 @@ private fun SetupPage(vm: LimitsViewModel) {
                 Text(if (on) "App limits is on" else "App limits is off", style = MaterialTheme.typography.titleLarge)
                 Text(
                     if (on) {
-                        "Turning it off takes a ${LimitRules.TURN_OFF_WAIT} minute wait on this screen. While it's on, the Settings pages that would stop it send you back to the home screen."
+                        "Turning it off takes a ${LimitRules.TURN_OFF_WAIT} minute wait on this screen."
                     } else {
                         "Nothing is counted against your limits or closed."
                     },
@@ -429,58 +383,18 @@ private fun SetupPage(vm: LimitsViewModel) {
         item("perms-head") { Heading("What it needs") }
         item("perms") {
             Card {
-                PermRow("Usage access", "To count your time in each app.", perms.usage) { openUsage(context) }
-                PermRow("Accessibility", "To see which app is open and close it.", perms.accessibility) { openAccessibility(context) }
-                if (!perms.accessibility) {
-                    Text(
-                        "If Android says it's a restricted setting: open App info, tap the three dots at the top right, " +
-                            "tap Allow restricted settings, then try again.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = muted,
-                    )
-                    QuietButton("Open App info", onClick = { open(context, Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))) }, height = 44.dp)
+                PermRow("Usage access", "To see which app is open and count your time in it.", perms.usage) { openUsage(context) }
+                PermRow("Display over other apps", "To put the block screen over an app once its time is used.", perms.overlay) {
+                    open(context, LimitWatcher.overlayIntent(context))
                 }
-                PermRow("Notification access", "To open Instagram chats from message notifications.", perms.notifications) { openNotifications(context) }
                 PermRow("Device admin", "So the app can't be uninstalled while App limits is on.", perms.admin) {
                     runCatching { admin.launch(adminIntent(context)) }
                 }
                 PermRow("Keep running", "So Android doesn't stop it in the background.", perms.battery) {
-                    open(context, LimitService.batteryIntent(context))
+                    open(context, LimitWatcher.batteryIntent(context))
                 }
                 PermRow("Automatic date and time", "With it off, limited apps stay closed.", perms.autoTime) {
                     open(context, Intent(Settings.ACTION_DATE_SETTINGS))
-                }
-            }
-        }
-        item("check-head") { Heading("Instagram screen check") }
-        item("check") {
-            Card {
-                Text(
-                    "Notes which Instagram screen App limits thinks you're on, with the names Instagram gives its parts. " +
-                        "Never your messages or anyone's name. Share it with Claude to tune the chats only mode.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = muted,
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Note Instagram screens", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                    Switch(
-                        checked = recording,
-                        onCheckedChange = { vm.setRecording(it) },
-                        colors = SwitchDefaults.colors(checkedTrackColor = brand.action, checkedThumbColor = brand.onAction),
-                    )
-                }
-                Text("$recorded ${if (recorded == 1) "screen" else "screens"} noted", style = MaterialTheme.typography.bodySmall, color = muted)
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    QuietButton("Share", enabled = recorded > 0, onClick = {
-                        val f = vm.exportRecording() ?: return@QuietButton
-                        val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", f)
-                        val send = Intent(Intent.ACTION_SEND)
-                            .setType("application/json")
-                            .putExtra(Intent.EXTRA_STREAM, uri)
-                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        open(context, Intent.createChooser(send, "Share Instagram screens"))
-                    }, height = 44.dp)
-                    QuietButton("Clear", enabled = recorded > 0, onClick = { vm.clearRecording() }, height = 44.dp, color = muted)
                 }
             }
         }
@@ -509,23 +423,6 @@ private fun open(context: Context, intent: Intent): Boolean =
 private fun openUsage(context: Context) {
     val exact = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS, Uri.parse("package:${context.packageName}"))
     if (Build.VERSION.SDK_INT < 29 || !open(context, exact)) open(context, Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
-}
-
-/** Accessibility's list: App limits is under Double O Broke (Downloaded apps, on some phones). */
-private fun openAccessibility(context: Context) {
-    open(context, Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-}
-
-private fun openNotifications(context: Context) {
-    if (Build.VERSION.SDK_INT >= 30) {
-        val exact = Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS)
-            .putExtra(
-                Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME,
-                ComponentName(context, app.brokeometer.capture.PaymentListenerService::class.java).flattenToString(),
-            )
-        if (open(context, exact)) return
-    }
-    open(context, Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
 }
 
 /**
