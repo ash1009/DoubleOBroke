@@ -50,6 +50,21 @@ object TripPlanner {
     /** Stations looked at near each end of a trip, nearest first. */
     private const val PICKS = 3
 
+    /**
+     * A train held away from a station (at a signal, or waiting for a platform) isn't the end of the
+     * ride: it carries on for up to this long while you stay put or move faster than walking.
+     */
+    private const val HOLD_MS = 20 * 60 * 1000L
+
+    /** Staying within this of where the train stopped is still waiting on it (the position wobbles). */
+    private const val HELD_M = 150.0
+
+    /** Faster than this is still the train (creeping into a station), not walking. */
+    private const val CREEP_MPS = 4.0
+
+    /** Positions rougher than this aren't used to tell creeping from walking. */
+    private const val CREEP_FIX_M = 100f
+
     private sealed interface Found {
         val leg: Leg
         /** [starts] and [ends] are the stations near each end, nearest first; [from] and [to] the nearest. */
@@ -60,10 +75,18 @@ object TripPlanner {
         data class Bus(override val leg: Leg, val from: Stop, val to: Stop, val line: String?) : Found
     }
 
-    suspend fun plan(legs: List<Leg>, lookup: StopLookup): List<Trip> {
+    /**
+     * The trips in a day's [legs]. [points] are the day's positions, used when a train ride stops away
+     * from any station: what happened next says where it really ended.
+     */
+    suspend fun plan(legs: List<Leg>, lookup: StopLookup, points: List<Fix> = emptyList()): List<Trip> {
         // Train rides close together are one trip before anything else: a train stopping at a station,
         // or changing lines, often breaks the ride into pieces, some of them ending between stations.
-        val found = chain(legs).mapNotNull { classify(it, lookup) }
+        val chained = chain(legs)
+        val pts = TripFinder.clean(points)
+        val found = chained.mapIndexedNotNull { i, leg ->
+            classify(leg, lookup, pts, until = chained.getOrNull(i + 1)?.from?.at ?: Long.MAX_VALUE)
+        }
 
         // Join trains with only a short walk between them at a station: that's changing trains, one fare.
         val joined = ArrayList<Found>()
@@ -114,6 +137,36 @@ object TripPlanner {
 
     private fun railLike(leg: Leg) = leg.underground || leg.maxSpeed > TRAIN_MPS
 
+    /**
+     * Where a ride that stopped away from a station really ended. Waiting where it stopped (for up to
+     * [HOLD_MS]) and moving faster than walking (a train creeping into a station) carry it on; walking
+     * away, or the next ride starting ([until]), ends it. The end is the last place reached faster
+     * than walking.
+     */
+    internal fun carryOn(leg: Leg, pts: List<Fix>, until: Long = Long.MAX_VALUE): Leg {
+        var end = leg.to
+        var prev = leg.to
+        var extra = 0.0
+        for (p in pts) {
+            if (p.at <= leg.to.at) continue
+            if (p.at - leg.to.at > HOLD_MS || p.at >= until) break
+            if (p.accuracy > CREEP_FIX_M) continue
+            val d = TripFinder.metres(prev, p)
+            val secs = (p.at - prev.at) / 1000.0
+            val reported = p.speed?.toDouble()?.takeIf { p.accuracy <= 25f }
+            val moving = if (reported != null) reported >= CREEP_MPS else secs > 0 && d / secs >= CREEP_MPS && d > (prev.accuracy + p.accuracy)
+            if (moving) {
+                extra += TripFinder.metres(end, p)
+                end = p
+            } else if (TripFinder.metres(end, p) > HELD_M) {
+                // Walking away from where the train stopped: that was the end.
+                break
+            }
+            prev = p
+        }
+        return if (end === leg.to) leg else Leg(leg.from, end, leg.underground, leg.maxSpeed, leg.distance + extra)
+    }
+
     /** Joins train rides that follow each other closely into one, unless the next one heads back to where it began. */
     internal fun chain(legs: List<Leg>): List<Leg> {
         val out = ArrayList<Leg>()
@@ -145,9 +198,21 @@ object TripPlanner {
         return gap in 0..CHANGE_MS || (gap in 0..CHANGE_LONG_MS && walked <= CHANGE_M)
     }
 
-    private suspend fun classify(leg: Leg, lookup: StopLookup): Found? {
+    private suspend fun classify(original: Leg, lookup: StopLookup, pts: List<Fix> = emptyList(), until: Long = Long.MAX_VALUE): Found? {
+        var leg = original
         val starts = lookup.stations(leg.from.lat, leg.from.lon, STATION_M)
-        val ends = lookup.stations(leg.to.lat, leg.to.lon, STATION_M)
+        var ends = lookup.stations(leg.to.lat, leg.to.lon, STATION_M)
+        // A train that stopped away from any station: the ride goes on to where it really stopped.
+        if (ends.isEmpty() && starts.isNotEmpty() && railLike(leg)) {
+            val longer = carryOn(leg, pts, until)
+            if (longer != leg) {
+                val there = lookup.stations(longer.to.lat, longer.to.lon, STATION_M)
+                if (there.isNotEmpty()) {
+                    leg = longer
+                    ends = there
+                }
+            }
+        }
         val start = starts.firstOrNull()
         val end = ends.firstOrNull()
         if (start != null && end != null && start.id != end.id && (leg.underground || leg.maxSpeed > TRAIN_MPS)) {

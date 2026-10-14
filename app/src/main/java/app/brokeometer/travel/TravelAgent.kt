@@ -51,7 +51,7 @@ class TravelAgent(
         val to = day.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
         val points = dao.points(from, to).map { Fix(it.at, it.lat, it.lon, it.accuracy, it.speed) }
         val legs = TripFinder.legs(points)
-        val trips = TripPlanner.plan(legs, tfl)
+        val trips = TripPlanner.plan(legs, tfl, points)
         val withFares = trips.map { t -> t to if (t.kind == TripKind.RAIL) runCatching { tfl.fare(t.from, t.to) }.getOrNull() else null }
         val priced = Fares.price(withFares, railcard = prefs.railcard.value.isNotBlank())
 
