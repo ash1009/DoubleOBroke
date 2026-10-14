@@ -30,6 +30,15 @@ class MailActionsTest {
     }
 
     @Test
+    fun spamNotCheckedYetIsListedButNotInTheInbox() {
+        val e = entry(MailActions.SPAM_UNCHECKED, MailFolders.SPAM)
+        assertFalse(MailActions.leftUnread(e))
+        assertFalse(MailActions.inInbox(e))
+        assertEquals(null, MailActions.attention(e))
+        assertFalse(MailActions.canDelete(e))
+    }
+
+    @Test
     fun theListMatchesTheEmailApp() {
         val a = MailActions
         // Read in Gmail: read here, and an email left unread here follows.

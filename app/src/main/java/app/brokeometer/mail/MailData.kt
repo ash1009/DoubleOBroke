@@ -108,6 +108,12 @@ object MailActions {
     const val READ_ELSEWHERE = "READ_ELSEWHERE"
     /** The AI could not be reached and the sender has no category yet: left in the inbox, alert kept. */
     const val UNDECIDED = "UNDECIDED"
+    /**
+     * In spam and not judged yet: the AI couldn't answer, or it couldn't be moved to the bin. Tried again
+     * on later checks; one the AI still can't judge after a few hours is left in spam for the owner, with
+     * a "might not be spam" notification.
+     */
+    const val SPAM_UNCHECKED = "SPAM_UNCHECKED"
     /** The owner said it is not spam: moved to the inbox. */
     const val NOT_SPAM = "NOT_SPAM"
     /** From a sender the owner said is not spam: moved to the inbox for the agent to handle. */
@@ -267,8 +273,24 @@ interface MailDao {
     @Query("SELECT COUNT(*) FROM mail_log WHERE messageId = :messageId AND action NOT IN ('UNDECIDED', 'MOVED_FROM_SPAM')")
     suspend fun handledCount(messageId: String): Int
 
-    @Query("SELECT * FROM mail_log WHERE messageId = :messageId AND action = 'UNDECIDED' ORDER BY id DESC LIMIT 1")
+    /** Whether this email is in the list at all, whatever happened to it (the tidy-up leaves those alone). */
+    @Query("SELECT COUNT(*) FROM mail_log WHERE messageId = :messageId")
+    suspend fun listedCount(messageId: String): Int
+
+    /**
+     * This email's entry still waiting for the inbox agent: one the AI couldn't decide on, or one that
+     * came out of spam. The agent's answer goes into the same entry, so each email is listed once.
+     */
+    @Query("SELECT * FROM mail_log WHERE messageId = :messageId AND undone = 0 AND action IN ('UNDECIDED', 'MOVED_FROM_SPAM') ORDER BY id DESC LIMIT 1")
     suspend fun undecided(messageId: String): MailLogEntity?
+
+    /** Inbox emails the AI couldn't decide on yet, since [since], newest first: tried again on each check. */
+    @Query("SELECT * FROM mail_log WHERE accountId = :accountId AND folder = 'inbox' AND action = 'UNDECIDED' AND undone = 0 AND at >= :since ORDER BY id DESC LIMIT :limit")
+    suspend fun undecidedSince(accountId: Long, since: Long, limit: Int): List<MailLogEntity>
+
+    /** Spam not judged yet, oldest first: tried again on each check. */
+    @Query("SELECT * FROM mail_log WHERE accountId = :accountId AND folder = 'spam' AND action = 'SPAM_UNCHECKED' AND undone = 0 ORDER BY id LIMIT :limit")
+    suspend fun uncheckedSpam(accountId: Long, limit: Int): List<MailLogEntity>
 
     @Update
     suspend fun updateLog(row: MailLogEntity)

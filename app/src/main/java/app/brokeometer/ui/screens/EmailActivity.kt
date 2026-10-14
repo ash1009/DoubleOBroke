@@ -492,6 +492,7 @@ fun outcomeOf(e: MailLogEntity): Pair<String, Color> {
         a.UNDECIDED -> "Couldn't decide, left in your inbox" to brand.careful
         a.SPAM_DELETED -> "Spam, moved to the bin" to brand.broke
         a.SPAM_FLAGGED -> "In spam, might be real" to brand.careful
+        a.SPAM_UNCHECKED -> "In spam, not checked yet" to brand.careful
         a.NOT_SPAM -> "Not spam, moved to your inbox" to brand.fine
         a.MOVED_FROM_SPAM -> "Moved out of spam" to brand.fine
         a.KEPT -> "Left unread" to muted
@@ -591,7 +592,7 @@ private fun ActivityRow(
             busy -> CircularProgressIndicator(color = brand.action, strokeWidth = 2.dp, modifier = Modifier.padding(12.dp).size(22.dp))
             picking -> Unit
             a.binned(e) -> RowIcon(Icons.AutoMirrored.Rounded.Undo, "Put back in my inbox", muted) { actions.restore(e) }
-            !e.undone && e.action == a.SPAM_FLAGGED -> Row {
+            !e.undone && (e.action == a.SPAM_FLAGGED || e.action == a.SPAM_UNCHECKED) -> Row {
                 RowIcon(Icons.Rounded.Check, "Spam, move it to the bin", brand.broke) { actions.spam(e) }
                 RowIcon(Icons.Rounded.Close, "Not spam, move it to my inbox", brand.fine) { actions.notSpam(e) }
             }

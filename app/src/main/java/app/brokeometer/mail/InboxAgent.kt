@@ -25,10 +25,11 @@ import kotlin.coroutines.coroutineContext
 data class Handled(val provider: String, val items: List<MailItem>)
 
 /**
- * The email agent. When Gmail or Yahoo shows a new email it reads it, asks the AI which category it
- * is, then either notifies (switch on) or marks it read and archives it (switch off). Every few hours
- * it also reads the spam folder: real spam goes to the bin, anything that might matter is flagged.
- * Every step is logged so it can be undone from the Email page.
+ * The email agent. Every email that comes into an account's inbox or spam goes into the list. For the
+ * inbox it asks the AI what the email is, then either notifies (switch on, or about you) or marks it
+ * read and archives it. In spam, real spam goes to the bin and anything that might matter is flagged
+ * with a notification. One email the AI can't judge never holds up the rest: it's listed as waiting
+ * and tried again. Every step is logged so it can be undone from the Email page.
  */
 class InboxAgent(
     private val context: Context,
@@ -99,8 +100,10 @@ class InboxAgent(
         }
     }
 
-    /** The regular checks: the inbox every 15 minutes, spam every 3 hours. */
-    /** Checks every account. [matchNow] makes the list match the email app straight away, not just every few minutes. */
+    /**
+     * Checks every account's inbox and spam (every 15 minutes, on opening the app, and on Check now).
+     * [matchNow] makes the list match the email app straight away, not just every few minutes.
+     */
     suspend fun checkAll(inbox: Boolean = true, spam: Boolean = true, matchNow: Boolean = false) {
         if (!prefs.mailAgentOn.value) return
         lock.withLock {
@@ -131,6 +134,11 @@ class InboxAgent(
         }
     }
 
+    /**
+     * The inbox: every new email goes into the list, and the AI's answer decides what happens to it.
+     * Nothing stops at one email: one the AI can't decide on is listed as undecided (left unread with its
+     * notification) and the rest carry on; it is tried again on later checks for [UNDECIDED_RETRY_MS].
+     */
     private suspend fun inbox(account: MailAccountEntity, matchNow: Boolean = false): List<MailItem> = withContext(Dispatchers.IO) {
         val password = prefs.mailPassword(account.address)
         if (password.isEmpty()) return@withContext emptyList()
@@ -142,117 +150,35 @@ class InboxAgent(
                 // Signed in: an old warning about this account no longer applies.
                 mail.clearNoteAbout(account.address)
                 val cursor = dao.cursor(account.id, MailFolders.INBOX)
-                val (items, next) = s.newSince(MailFolders.INBOX, cursor?.uidValidity, cursor?.lastUid, MAX_PER_CHECK)
+                var (items, next) = s.newSince(MailFolders.INBOX, cursor?.uidValidity, cursor?.lastUid, MAX_PER_CHECK)
                     ?: return@withContext emptyList()
                 if (cursor == null || cursor.uidValidity != next.first) {
                     // First look at this inbox: start from now.
                     dao.saveCursor(MailCursorEntity(account.id, MailFolders.INBOX, next.first, next.second))
                     return@withContext emptyList()
                 }
+                // Emails the AI couldn't decide on before get another go first.
+                retryUndecided(account, s, categories, handled)
                 var lastDone = cursor.lastUid
-                for (item in items.sortedBy { it.uid }) {
-                    val before = item.messageId?.let { dao.handledCount(it) } ?: 0
-                    if (before > 0) {
-                        // Put back in the inbox with Undo, or taken out of spam by you: leave it.
+                var batches = 0
+                while (true) {
+                    for (item in items.sortedBy { it.uid }) {
+                        if (handleInboxItem(account, s, item, categories, retry = null)) handled += item
+                        // Saved after each email, so a check cut short never loses one.
                         lastDone = item.uid
-                        continue
+                        dao.saveCursor(MailCursorEntity(account.id, MailFolders.INBOX, next.first, lastDone))
                     }
-                    val waiting = item.messageId?.let { dao.undecided(it) }
-                    fun entry(category: MailCategoryEntity?, action: String, summary: String) = MailLogEntity(
-                        id = waiting?.id ?: 0,
-                        at = System.currentTimeMillis(),
-                        accountId = account.id,
-                        folder = MailFolders.INBOX,
-                        uid = item.uid,
-                        messageId = item.messageId,
-                        fromName = item.fromName,
-                        fromAddress = item.fromAddress,
-                        subject = item.subject,
-                        categoryId = category?.id,
-                        categoryName = category?.name.orEmpty(),
-                        action = action,
-                        summary = summary,
-                    )
-                    suspend fun save(row: MailLogEntity): Long = if (waiting != null) {
-                        dao.updateLog(row)
-                        row.id
-                    } else {
-                        dao.insertLog(row)
+                    if (items.isEmpty()) {
+                        lastDone = maxOf(lastDone, next.second)
+                        dao.saveCursor(MailCursorEntity(account.id, MailFolders.INBOX, next.first, lastDone))
+                        break
                     }
-                    if (item.seen) {
-                        save(entry(null, MailActions.READ_ELSEWHERE, "You had already read it, so it was left as it was."))
-                        lastDone = item.uid
-                        continue
-                    }
-                    val code = MailCodes.find(item.subject, item.text)
-                    if (code != null) {
-                        // A code (OTP) always notifies, at once and with no AI, whatever its kind.
-                        val usual = dao.sender(account.id, item.fromAddress)?.categoryId?.let { id -> categories.firstOrNull { it.id == id } }
-                        val row = entry(usual, MailActions.NOTIFIED, "Has a code, so you were told straight away.")
-                        val id = save(row)
-                        notifier.important(row.copy(id = id), account, code)
-                        handled += item
-                        lastDone = item.uid
-                        continue
-                    }
-                    if (item.fromAddress.isNotEmpty() && item.fromAddress.lowercase() in prefs.quietSenders.value) {
-                        // A sender you said isn't important: no AI, just marked read.
-                        runCatching { s.markRead(MailFolders.INBOX, item.uid) }
-                        save(entry(null, MailActions.MARKED_READ, QUIET_SUMMARY))
-                        handled += item
-                        lastDone = item.uid
-                        continue
-                    }
-                    // A sender you said is important always reaches you.
-                    val vip = item.fromAddress.isNotEmpty() && item.fromAddress.lowercase() in prefs.importantSenders.value
-                    when (val decision = decide(item, categories)) {
-                        is Decision.Undecided -> {
-                            if (vip) {
-                                val row = entry(null, MailActions.NOTIFIED, "${item.subject.take(80)}. You said this sender is important.")
-                                val id = save(row)
-                                notifier.important(row.copy(id = id), account)
-                                handled += item
-                                lastDone = item.uid
-                                continue
-                            }
-                            // Left in the inbox with its notification, and tried again on the next check.
-                            if (waiting == null) save(entry(null, MailActions.UNDECIDED, decision.why))
-                            break
-                        }
-                        is Decision.Made -> {
-                            val category = decision.category
-                            // What the email says decides: anything about you reaches you, whatever its kind.
-                            val why = when {
-                                category.important -> ""
-                                vip -> " You said this sender is important."
-                                decision.personal -> " It's about you, so you were told even though ${category.name} is off."
-                                else -> null
-                            }
-                            if (why != null) {
-                                val summary = decision.summary + why
-                                val id = save(entry(category, MailActions.NOTIFIED, summary))
-                                notifier.important(entry(category, MailActions.NOTIFIED, summary).copy(id = id), account)
-                            } else {
-                                val archived = runCatching { s.archive(item.uid) }.getOrDefault(false)
-                                val read = archived || runCatching { s.markRead(MailFolders.INBOX, item.uid) }.isSuccess
-                                if (!read) {
-                                    // The mailbox didn't take it: left as it is, and tried again on the next check.
-                                    break
-                                }
-                                if (archived) {
-                                    save(entry(category, MailActions.ARCHIVED, decision.summary))
-                                } else {
-                                    save(entry(category, MailActions.MARKED_READ, decision.summary + " It couldn't be archived, so it was marked read in your inbox."))
-                                }
-                            }
-                            learn(account, item, category)
-                            handled += item
-                        }
-                    }
-                    lastDone = item.uid
+                    batches++
+                    if (items.size < MAX_PER_CHECK || batches >= MAX_BATCHES) break
+                    val more = s.newSince(MailFolders.INBOX, next.first, lastDone, MAX_PER_CHECK) ?: break
+                    items = more.first
+                    next = more.second
                 }
-                if (items.isEmpty()) lastDone = maxOf(lastDone, next.second)
-                dao.saveCursor(MailCursorEntity(account.id, MailFolders.INBOX, next.first, lastDone))
                 try {
                     matchEmailApp(account, s, matchNow)
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -269,11 +195,140 @@ class InboxAgent(
             return@withContext handled
         } catch (e: MailClient.MailError) {
             mail.note("Agent could not check ${account.address}: ${e.message}")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             mail.note("Agent problem with ${account.address}: ${e.javaClass.simpleName}")
         }
         dao.trimLog()
         handled
+    }
+
+    /** Inbox emails the AI couldn't decide on: asked again while they're still unread in the inbox. */
+    private suspend fun retryUndecided(account: MailAccountEntity, s: MailSession, categories: List<MailCategoryEntity>, handled: MutableList<MailItem>) {
+        val waiting = dao.undecidedSince(account.id, System.currentTimeMillis() - UNDECIDED_RETRY_MS, MAX_PER_CHECK)
+        if (waiting.isEmpty()) return
+        val found = s.itemsByUid(MailFolders.INBOX, waiting.map { it.uid }).associateBy { it.uid }
+        for (w in waiting) {
+            // Gone from the inbox, or another email under that UID: matching with the email app sorts it out.
+            val item = found[w.uid]?.takeIf { it.messageId == w.messageId } ?: continue
+            if (handleInboxItem(account, s, item, categories, retry = w)) handled += item
+        }
+    }
+
+    /**
+     * One inbox email, start to finish. It always ends up in the list: decided (notified, archived, read),
+     * or undecided when the AI can't answer or the mailbox won't take the change. True when the agent
+     * dealt with it, so the email app's own notification can go.
+     */
+    private suspend fun handleInboxItem(
+        account: MailAccountEntity,
+        s: MailSession,
+        item: MailItem,
+        categories: List<MailCategoryEntity>,
+        retry: MailLogEntity?,
+    ): Boolean {
+        if (retry == null) {
+            val before = item.messageId?.let { dao.handledCount(it) } ?: 0
+            // Put back in the inbox with Undo, or taken out of spam by you: leave it.
+            if (before > 0) return false
+        }
+        val waiting = retry ?: item.messageId?.let { dao.undecided(it) }
+        fun entry(category: MailCategoryEntity?, action: String, summary: String) = MailLogEntity(
+            id = waiting?.id ?: 0,
+            at = System.currentTimeMillis(),
+            accountId = account.id,
+            folder = MailFolders.INBOX,
+            uid = item.uid,
+            messageId = item.messageId,
+            fromName = item.fromName,
+            fromAddress = item.fromAddress,
+            subject = item.subject,
+            categoryId = category?.id,
+            categoryName = category?.name.orEmpty(),
+            action = action,
+            summary = summary,
+        )
+        suspend fun save(row: MailLogEntity): Long = if (waiting != null) {
+            dao.updateLog(row)
+            row.id
+        } else {
+            dao.insertLog(row)
+        }
+        // Undecided: listed (keeping when it first came in, which is how long it's tried for), and tried again later.
+        suspend fun undecided(why: String) {
+            if (waiting != null && waiting.action == MailActions.UNDECIDED) {
+                dao.setLogOutcome(waiting.id, MailActions.UNDECIDED, why)
+            } else {
+                save(entry(null, MailActions.UNDECIDED, why))
+            }
+        }
+        if (item.seen) {
+            save(entry(null, MailActions.READ_ELSEWHERE, "You had already read it, so it was left as it was."))
+            return false
+        }
+        val code = MailCodes.find(item.subject, item.text)
+        if (code != null) {
+            // A code (OTP) always notifies, at once and with no AI, whatever its kind.
+            val usual = dao.sender(account.id, item.fromAddress)?.categoryId?.let { id -> categories.firstOrNull { it.id == id } }
+            val row = entry(usual, MailActions.NOTIFIED, "Has a code, so you were told straight away.")
+            val id = save(row)
+            notifier.important(row.copy(id = id), account, code)
+            return true
+        }
+        if (item.fromAddress.isNotEmpty() && item.fromAddress.lowercase() in prefs.quietSenders.value) {
+            // A sender you said isn't important: no AI, just marked read.
+            if (runCatching { s.markRead(MailFolders.INBOX, item.uid) }.isFailure) {
+                undecided("Left unread: your mailbox didn't take the change. Tried again on the next check.")
+                return false
+            }
+            save(entry(null, MailActions.MARKED_READ, QUIET_SUMMARY))
+            return true
+        }
+        // A sender you said is important always reaches you.
+        val vip = item.fromAddress.isNotEmpty() && item.fromAddress.lowercase() in prefs.importantSenders.value
+        return when (val decision = decide(item, categories)) {
+            is Decision.Undecided -> {
+                if (vip) {
+                    val row = entry(null, MailActions.NOTIFIED, "${item.subject.take(80)}. You said this sender is important.")
+                    val id = save(row)
+                    notifier.important(row.copy(id = id), account)
+                    true
+                } else {
+                    // Left in the inbox with its notification, and tried again on later checks.
+                    undecided(decision.why)
+                    false
+                }
+            }
+            is Decision.Made -> {
+                val category = decision.category
+                // What the email says decides: anything about you reaches you, whatever its kind.
+                val why = when {
+                    category.important -> ""
+                    vip -> " You said this sender is important."
+                    decision.personal -> " It's about you, so you were told even though ${category.name} is off."
+                    else -> null
+                }
+                if (why != null) {
+                    val summary = decision.summary + why
+                    val id = save(entry(category, MailActions.NOTIFIED, summary))
+                    notifier.important(entry(category, MailActions.NOTIFIED, summary).copy(id = id), account)
+                } else {
+                    val archived = runCatching { s.archive(item.uid) }.getOrDefault(false)
+                    val read = archived || runCatching { s.markRead(MailFolders.INBOX, item.uid) }.isSuccess
+                    when {
+                        archived -> save(entry(category, MailActions.ARCHIVED, decision.summary))
+                        read -> save(entry(category, MailActions.MARKED_READ, decision.summary + " It couldn't be archived, so it was marked read in your inbox."))
+                        else -> {
+                            undecided("Left unread: your mailbox didn't take the change. Tried again on the next check.")
+                            return false
+                        }
+                    }
+                }
+                learn(account, item, category)
+                true
+            }
+        }
     }
 
     /** When each account's list was last matched with the email app. */
@@ -286,7 +341,7 @@ class InboxAgent(
         val now = System.currentTimeMillis()
         if (now - openedAt < OPEN_CHECK_EVERY_MS) return
         openedAt = now
-        scope.launch { runCatching { checkAll(inbox = true, spam = false, matchNow = true) } }
+        scope.launch { runCatching { checkAll(inbox = true, spam = true, matchNow = true) } }
     }
 
     /**
@@ -334,64 +389,46 @@ class InboxAgent(
         )
     }
 
+    /**
+     * The spam folder: every email in it goes into the list. Real spam goes to the bin; anything the AI
+     * isn't sure about stays in spam with a "might not be spam" notification. One the AI can't judge, or
+     * that won't move, is listed as not checked yet and tried again on later checks, and the rest carry
+     * on. Read from the oldest the first time, so what is there already gets checked too.
+     */
     private suspend fun spam(account: MailAccountEntity) = withContext(Dispatchers.IO) {
         val password = prefs.mailPassword(account.address)
         if (password.isEmpty()) return@withContext
         try {
             client.session(mail.server(account), account.address, password, account.provider, background = true).use { s ->
+                retrySpam(account, s)
                 val cursor = dao.cursor(account.id, MailFolders.SPAM)
-                // The spam folder is read from the oldest email the first time, so what is there now gets checked too.
-                val (items, next) = s.newSince(
+                var (items, next) = s.newSince(
                     MailFolders.SPAM, cursor?.uidValidity, cursor?.lastUid, MAX_SPAM_PER_CHECK, startAtOldest = true,
-                ) ?: return@withContext
+                ) ?: run {
+                    mail.note("Couldn't find the spam folder in ${account.address}, so its spam isn't being checked.")
+                    return@withContext
+                }
                 val sameFolder = cursor != null && cursor.uidValidity == next.first
                 var lastDone = if (sameFolder) cursor!!.lastUid else 0L
-                for (item in items.sortedBy { it.uid }) {
-                    val sender = item.fromAddress.lowercase()
-                    // Senders you have already judged skip the AI.
-                    if (sender.isNotEmpty() && sender in prefs.notSpamSenders.value) {
-                        if (!runCatching { s.spamToInbox(item.messageId, item.uid) }.getOrDefault(false)) break
-                        dao.insertLog(
-                            spamEntry(account, item, MailActions.MOVED_FROM_SPAM, "You said this sender isn't spam, so it went to your inbox.")
-                        )
+                var batches = 0
+                while (true) {
+                    for (item in items.sortedBy { it.uid }) {
+                        judgeSpam(account, s, item, retry = null)
+                        // Saved after each email, so a check cut short never loses one.
                         lastDone = item.uid
-                        continue
+                        dao.saveCursor(MailCursorEntity(account.id, MailFolders.SPAM, next.first, lastDone))
                     }
-                    if (sender.isNotEmpty() && sender in prefs.spamSenders.value) {
-                        if (!runCatching { s.spamToBin(item.messageId, item.uid) }.getOrDefault(false)) break
-                        dao.insertLog(spamEntry(account, item, MailActions.SPAM_DELETED, "You marked this sender as spam before."))
-                        lastDone = item.uid
-                        continue
+                    if (items.isEmpty()) {
+                        lastDone = maxOf(lastDone, next.second)
+                        dao.saveCursor(MailCursorEntity(account.id, MailFolders.SPAM, next.first, lastDone))
+                        break
                     }
-                    val verdict = when (val r = mail.ask(MailPrompts.checkSpam(item), maxTokens = 200)) {
-                        is Brain.Answer.Text -> MailPrompts.parseSpam(r.text)
-                        is Brain.Answer.Failed -> null
-                    } ?: break
-                    val log = MailLogEntity(
-                        at = System.currentTimeMillis(),
-                        accountId = account.id,
-                        folder = MailFolders.SPAM,
-                        uid = item.uid,
-                        messageId = item.messageId,
-                        fromName = item.fromName,
-                        fromAddress = item.fromAddress,
-                        subject = item.subject,
-                        categoryId = null,
-                        categoryName = "Spam",
-                        action = if (verdict.spam) MailActions.SPAM_DELETED else MailActions.SPAM_FLAGGED,
-                        summary = verdict.why,
-                    )
-                    if (verdict.spam) {
-                        if (!runCatching { s.spamToBin(item.messageId, item.uid) }.getOrDefault(false)) break
-                        dao.insertLog(log)
-                    } else {
-                        val id = dao.insertLog(log)
-                        notifier.maybeNotSpam(log.copy(id = id), account)
-                    }
-                    lastDone = item.uid
+                    batches++
+                    if (items.size < MAX_SPAM_PER_CHECK || batches >= MAX_SPAM_BATCHES) break
+                    val more = s.newSince(MailFolders.SPAM, next.first, lastDone, MAX_SPAM_PER_CHECK, startAtOldest = true) ?: break
+                    items = more.first
+                    next = more.second
                 }
-                if (items.isEmpty()) lastDone = maxOf(lastDone, next.second)
-                dao.saveCursor(MailCursorEntity(account.id, MailFolders.SPAM, next.first, lastDone))
             }
         } catch (e: MailClient.LoginRefused) {
             loginTrouble(account.address)
@@ -399,10 +436,123 @@ class InboxAgent(
             // Another check had the mailbox: the next one looks again.
         } catch (e: MailClient.MailError) {
             mail.note("Spam check could not reach ${account.address}: ${e.message}")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             mail.note("Spam check problem with ${account.address}: ${e.javaClass.simpleName}")
         }
     }
+
+    /**
+     * Spam not checked yet gets another go. One no longer in spam was moved or deleted in the email app;
+     * one the AI still can't judge after [GIVE_UP_MS] is left in spam with a "might not be spam"
+     * notification, since nobody could say it is spam.
+     */
+    private suspend fun retrySpam(account: MailAccountEntity, s: MailSession) {
+        val waiting = dao.uncheckedSpam(account.id, MAX_SPAM_PER_CHECK)
+        if (waiting.isEmpty()) return
+        val found = s.itemsByUid(MailFolders.SPAM, waiting.map { it.uid }).associateBy { it.uid }
+        val now = System.currentTimeMillis()
+        for (w in waiting) {
+            val item = found[w.uid]?.takeIf { it.messageId == w.messageId }
+            if (item == null) {
+                dao.setLogOutcome(w.id, MailActions.MOVED_FROM_SPAM, GONE_FROM_SPAM)
+                continue
+            }
+            if (w.summary.startsWith(NOT_CHECKED) && now - w.at > GIVE_UP_MS) {
+                val summary = "The AI couldn't judge it for hours, so it was left in spam for you to look at."
+                dao.setLogOutcome(w.id, MailActions.SPAM_FLAGGED, summary)
+                notifier.maybeNotSpam(w.copy(action = MailActions.SPAM_FLAGGED, summary = summary), account)
+                continue
+            }
+            judgeSpam(account, s, item, retry = w)
+        }
+    }
+
+    /** One spam email, start to finish. It always ends up in the list, whatever happens. */
+    private suspend fun judgeSpam(account: MailAccountEntity, s: MailSession, item: MailItem, retry: MailLogEntity?) {
+        // Already listed (the folder was read again from the start): left as it is.
+        if (retry == null && item.messageId != null && dao.logsFor(listOf(item.messageId)).any { it.folder == MailFolders.SPAM }) return
+        suspend fun put(action: String, summary: String): MailLogEntity {
+            val row = MailLogEntity(
+                id = retry?.id ?: 0,
+                at = System.currentTimeMillis(),
+                accountId = account.id,
+                folder = MailFolders.SPAM,
+                uid = item.uid,
+                messageId = item.messageId,
+                fromName = item.fromName,
+                fromAddress = item.fromAddress,
+                subject = item.subject,
+                categoryId = null,
+                categoryName = "Spam",
+                action = action,
+                summary = summary,
+            )
+            return if (retry != null) {
+                dao.updateLog(row)
+                row
+            } else {
+                row.copy(id = dao.insertLog(row))
+            }
+        }
+        // Not checked yet: listed (keeping when it first came in), and tried again later.
+        suspend fun notYet(summary: String) {
+            if (retry == null) put(MailActions.SPAM_UNCHECKED, summary) else dao.setLogOutcome(retry.id, MailActions.SPAM_UNCHECKED, summary)
+        }
+        /** Moves it out of spam; [done] is what happened when it moved. */
+        suspend fun move(toBin: Boolean, done: suspend () -> Unit) {
+            val r = runCatching { s.moveOutOfSpam(item.messageId, item.uid, toBin) }
+            when (r.getOrNull()) {
+                MailSession.SpamMove.MOVED -> done()
+                MailSession.SpamMove.NOT_IN_SPAM -> put(MailActions.MOVED_FROM_SPAM, GONE_FROM_SPAM)
+                MailSession.SpamMove.NO_FOLDER -> {
+                    notYet("${if (toBin) NOT_MOVED_TO_BIN else NOT_MOVED_TO_INBOX}: couldn't find the ${if (toBin) "bin" else "inbox"} folder. Tried again on the next check.")
+                    mail.note("Couldn't find the ${if (toBin) "bin" else "inbox"} folder in ${account.address}, so spam can't be moved.")
+                }
+                null -> notYet("${if (toBin) NOT_MOVED_TO_BIN else NOT_MOVED_TO_INBOX}: your mailbox didn't take the change. Tried again on the next check.")
+            }
+        }
+        val sender = item.fromAddress.lowercase()
+        // Senders you have already judged skip the AI.
+        if (sender.isNotEmpty() && sender in prefs.notSpamSenders.value) {
+            move(toBin = false) { put(MailActions.MOVED_FROM_SPAM, "You said this sender isn't spam, so it went to your inbox.") }
+            return
+        }
+        if (sender.isNotEmpty() && sender in prefs.spamSenders.value) {
+            move(toBin = true) { put(MailActions.SPAM_DELETED, "You marked this sender as spam before.") }
+            return
+        }
+        // Spam it already judged, that only failed to move: no need to ask the AI again.
+        if (retry != null && retry.summary.startsWith(NOT_MOVED_TO_BIN)) {
+            move(toBin = true) { put(MailActions.SPAM_DELETED, "Spam, moved to the bin.") }
+            return
+        }
+        val reply = mail.ask(MailPrompts.checkSpam(item), maxTokens = 200)
+        val verdict = (reply as? Brain.Answer.Text)?.let { MailPrompts.parseSpam(it.text) }
+        if (verdict == null) {
+            val why = when (reply) {
+                is Brain.Answer.Failed -> reply.message
+                is Brain.Answer.Text -> "its answer couldn't be read"
+            }
+            if (reply is Brain.Answer.Failed) aiTrouble(reply.message)
+            notYet("$NOT_CHECKED: the AI couldn't judge it ($why). Tried again on the next check.")
+            return
+        }
+        clearAiTrouble()
+        if (verdict.spam) {
+            move(toBin = true) { put(MailActions.SPAM_DELETED, verdict.why) }
+        } else {
+            notifier.maybeNotSpam(put(MailActions.SPAM_FLAGGED, verdict.why), account)
+        }
+    }
+
+    /** The AI couldn't answer: said on the Email page until it answers again. */
+    private fun aiTrouble(message: String) {
+        mail.note("$AI_TROUBLE ($message). They're listed, and tried again on the next check.")
+    }
+
+    private fun clearAiTrouble() = mail.clearNoteStarting(AI_TROUBLE)
 
     private sealed interface Decision {
         data class Made(val category: MailCategoryEntity, val summary: String, val personal: Boolean) : Decision
@@ -416,7 +566,11 @@ class InboxAgent(
     private suspend fun decide(item: MailItem, categories: List<MailCategoryEntity>): Decision {
         val reply = mail.ask(MailPrompts.decideEmail(categories, item), maxTokens = 300)
         val decision = (reply as? Brain.Answer.Text)?.let { MailPrompts.parseDecision(it.text, categories.size) }
-        if (decision != null) return Decision.Made(categories[decision.category], decision.summary.ifBlank { item.subject }, decision.personal)
+        if (decision != null) {
+            clearAiTrouble()
+            return Decision.Made(categories[decision.category], decision.summary.ifBlank { item.subject }, decision.personal)
+        }
+        if (reply is Brain.Answer.Failed) aiTrouble(reply.message)
         val why = when (reply) {
             is Brain.Answer.Failed -> reply.message
             is Brain.Answer.Text -> "The AI's answer could not be read."
@@ -485,7 +639,7 @@ class InboxAgent(
                             if (!coroutineContext.isActive) break
                             mail.report(MailProgress(MailProgress.Stage.TIDYING, account.address, done, uids.size))
                             val unread = s.headers(chunk).filter { item ->
-                                !item.seen && (item.messageId == null || dao.handledCount(item.messageId) == 0)
+                                !item.seen && (item.messageId == null || dao.listedCount(item.messageId) == 0)
                             }
                             // Senders you said aren't important skip the AI and are just marked read.
                             val (quiet, todo) = unread.partition { it.fromAddress.isNotEmpty() && it.fromAddress in prefs.quietSenders.value }
@@ -563,21 +717,6 @@ class InboxAgent(
         subject = item.subject,
         categoryId = category?.id,
         categoryName = category?.name.orEmpty(),
-        action = action,
-        summary = summary,
-    )
-
-    private fun spamEntry(account: MailAccountEntity, item: MailItem, action: String, summary: String) = MailLogEntity(
-        at = System.currentTimeMillis(),
-        accountId = account.id,
-        folder = MailFolders.SPAM,
-        uid = item.uid,
-        messageId = item.messageId,
-        fromName = item.fromName,
-        fromAddress = item.fromAddress,
-        subject = item.subject,
-        categoryId = null,
-        categoryName = "Spam",
         action = action,
         summary = summary,
     )
@@ -787,6 +926,23 @@ class InboxAgent(
         private const val WARN_AFTER_MS = 30 * 60_000L
         private const val MAX_PER_CHECK = 25
 
+        /** Up to this many lots of new emails in one check, so a busy inbox or spam folder keeps up. */
+        private const val MAX_BATCHES = 4
+        private const val MAX_SPAM_BATCHES = 2
+
+        /** An inbox email the AI couldn't decide on is asked about again for this long (it stays listed after). */
+        private const val UNDECIDED_RETRY_MS = 24 * 60 * 60_000L
+
+        /** Spam the AI still can't judge after this long is left in spam with a "might not be spam" notification. */
+        private const val GIVE_UP_MS = 6 * 60 * 60_000L
+
+        /** How the agent's notes and lines start, so it can tell them apart later. */
+        private const val AI_TROUBLE = "The AI couldn't check some emails"
+        private const val NOT_CHECKED = "Not checked yet"
+        private const val NOT_MOVED_TO_BIN = "Spam, not moved to the bin yet"
+        private const val NOT_MOVED_TO_INBOX = "Not moved to your inbox yet"
+        private const val GONE_FROM_SPAM = "No longer in spam: moved or deleted in your email app."
+
         /** Matching the list with the email app: how often in the background, and how far back. */
         private const val MATCH_EVERY_MS = 5 * 60_000L
         private const val MATCH_DAYS = 30L
@@ -815,11 +971,8 @@ class InboxAgent(
 class MailWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val container = (applicationContext as BrokeApp).container
-        if (inputData.getString(InboxAgent.KIND) == InboxAgent.KIND_INBOX) {
-            container.inboxAgent.checkAll(inbox = true, spam = false)
-        } else {
-            container.inboxAgent.checkAll()
-        }
+        // Inbox and spam both, every time: spam has no notification to say it arrived.
+        container.inboxAgent.checkAll()
         return Result.success()
     }
 }

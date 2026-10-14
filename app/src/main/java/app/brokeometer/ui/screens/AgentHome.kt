@@ -247,11 +247,13 @@ private fun handledToday(todays: List<MailLogEntity>, needingYou: Int): String {
     if (todays.isEmpty()) return "Nothing new has come in today."
     val archived = todays.count { !it.undone && it.action == MailActions.ARCHIVED }
     val binned = todays.count { !it.undone && it.action == MailActions.SPAM_DELETED }
+    val waiting = todays.count { !it.undone && it.action == MailActions.SPAM_UNCHECKED }
     val needYou = todays.count { MailActions.attention(it) != null }
-    val rest = todays.size - archived - binned - needYou
+    val rest = todays.size - archived - binned - waiting - needYou
     val parts = buildList {
         if (archived > 0) add("$archived sorted and archived")
         if (binned > 0) add("$binned spam binned")
+        if (waiting > 0) add("$waiting spam not checked yet")
         if (needYou > 0) add("$needYou need you")
         if (rest > 0) add("$rest read")
     }

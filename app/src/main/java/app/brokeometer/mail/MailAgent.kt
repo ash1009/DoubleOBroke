@@ -379,6 +379,11 @@ class MailAgent(
         if (_problem.value?.contains(address, ignoreCase = true) == true) _problem.value = null
     }
 
+    /** Clears the note if it starts with [prefix]: that problem has gone away. */
+    fun clearNoteStarting(prefix: String) {
+        if (_problem.value?.startsWith(prefix) == true) _problem.value = null
+    }
+
     /** Claude while there is a key and credit, otherwise Gemini. */
     private fun brain(): Brain = when {
         BuildConfig.DEBUG && prefs.claudeKey.value == FAKE_KEY -> FakeBrain
@@ -452,6 +457,9 @@ private object FakeBrain : Brain {
             val (where, place) = if ("metro" in said) "Metro" to "Vauxhall" else "Pret" to ""
             return Brain.Answer.Text("""{"amount": $amount, "currency": "GBP", "where": "$where", "place": "$place", "note": "", "id": ${pick?.get(1) ?: 0}, "days_ago": 0}""")
         }
+        // An answer that can't be read, as a real AI sometimes gives, for one email: the agent must carry on past it.
+        val oneEmail = prompt.startsWith("This email is in the spam folder") || prompt.contains("Pick the one category this email belongs to")
+        if (oneEmail && prompt.contains("unreadable", ignoreCase = true)) return Brain.Answer.Text("Hard to say, sorry.")
         if (prompt.startsWith("This email is in the spam folder")) {
             val keep = prompt.contains("invoice", ignoreCase = true) || prompt.contains("interview", ignoreCase = true)
             return Brain.Answer.Text(if (keep) """{"spam":false,"why":"Looks like a real invoice"}""" else """{"spam":true,"why":"Prize scam"}""")

@@ -244,7 +244,7 @@ private fun MessagePage(id: Long, page: MessageViewModel, vm: MailViewModel, onR
                     MailActions.leftUnread(e) -> QuietButton("Mark read", onClick = { vm.markRead(e) }, enabled = !busy, height = 40.dp)
                     MailActions.canMarkUnread(e) -> QuietButton("Mark unread", onClick = { vm.markUnread(e) }, enabled = !busy, height = 40.dp)
                 }
-                if (!e.undone && e.action == MailActions.SPAM_FLAGGED) {
+                if (!e.undone && (e.action == MailActions.SPAM_FLAGGED || e.action == MailActions.SPAM_UNCHECKED)) {
                     QuietButton("It's spam", onClick = { vm.markSpam(e) }, enabled = !busy, height = 40.dp)
                     QuietButton("Not spam", onClick = { vm.notSpam(e) }, enabled = !busy, height = 40.dp)
                 } else if (!e.undone && e.action == MailActions.SPAM_DELETED && e.messageId != null) {

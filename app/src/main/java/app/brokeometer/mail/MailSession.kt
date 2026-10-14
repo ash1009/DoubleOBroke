@@ -134,21 +134,48 @@ class MailSession(private val store: IMAPStore, private val provider: String, pr
         }
     }
 
-    private fun item(folder: IMAPFolder, m: Message): MailItem? = try {
-        val from = m.from?.firstOrNull() as? InternetAddress
-        MailItem(
-            uid = folder.getUID(m),
-            messageId = (m as? MimeMessage)?.messageID,
-            fromName = from?.personal?.trim().orEmpty(),
+    /**
+     * One email as the agent sees it. Each part is read on its own, so an email with a broken part (an
+     * odd header, a body that won't decode) still comes through with what could be read: no email is
+     * ever skipped because of how it was written.
+     */
+    private fun item(folder: IMAPFolder, m: Message): MailItem? {
+        val uid = runCatching { folder.getUID(m) }.getOrNull()?.takeIf { it > 0 } ?: return null
+        val from = runCatching { m.from?.firstOrNull() as? InternetAddress }.getOrNull()
+        return MailItem(
+            uid = uid,
+            messageId = runCatching { (m as? MimeMessage)?.messageID }.getOrNull(),
+            fromName = runCatching { from?.personal?.trim() }.getOrNull().orEmpty(),
             fromAddress = from?.address?.trim()?.lowercase(Locale.ROOT).orEmpty(),
-            to = m.getRecipients(Message.RecipientType.TO)?.joinToString(", ") { a -> (a as? InternetAddress)?.address ?: a.toString() }.orEmpty(),
-            subject = m.subject.orEmpty(),
-            receivedAt = (m.receivedDate ?: m.sentDate)?.time ?: System.currentTimeMillis(),
-            seen = m.isSet(Flags.Flag.SEEN),
-            text = MailText.of(m, TEXT_LIMIT),
+            to = runCatching {
+                m.getRecipients(Message.RecipientType.TO)?.joinToString(", ") { a -> (a as? InternetAddress)?.address ?: a.toString() }
+            }.getOrNull().orEmpty(),
+            subject = runCatching { m.subject }.getOrNull().orEmpty(),
+            receivedAt = runCatching { (m.receivedDate ?: m.sentDate)?.time }.getOrNull() ?: System.currentTimeMillis(),
+            seen = runCatching { m.isSet(Flags.Flag.SEEN) }.getOrDefault(false),
+            text = runCatching { MailText.of(m, TEXT_LIMIT) }.getOrDefault(""),
         )
-    } catch (e: MessagingException) {
-        null
+    }
+
+    /** These emails, by UID, as the agent sees them; ones no longer in the folder are left out. */
+    fun itemsByUid(kind: String, uids: List<Long>): List<MailItem> {
+        if (uids.isEmpty()) return emptyList()
+        val folder = folder(kind) ?: return emptyList()
+        folder.open(Folder.READ_ONLY)
+        try {
+            val found = folder.getMessagesByUID(uids.distinct().sorted().toLongArray()).filterNotNull().toTypedArray()
+            if (found.isEmpty()) return emptyList()
+            val profile = FetchProfile().apply {
+                add(FetchProfile.Item.ENVELOPE)
+                add(FetchProfile.Item.FLAGS)
+                add(UIDFolder.FetchProfileItem.UID)
+                add(FetchProfile.Item.CONTENT_INFO)
+            }
+            folder.fetch(found, profile)
+            return found.mapNotNull { item(folder, it) }
+        } finally {
+            runCatching { folder.close(false) }
+        }
     }
 
     fun markRead(kind: String, uid: Long, read: Boolean = true) {
@@ -489,9 +516,18 @@ class MailSession(private val store: IMAPStore, private val provider: String, pr
     /** Moves an email from spam to the bin. */
     fun spamToBin(messageId: String?, uid: Long?): Boolean = moveFromSpam(messageId, uid, trash())
 
-    private fun moveFromSpam(messageId: String?, uid: Long?, to: IMAPFolder?): Boolean {
-        val spam = spam() ?: return false
-        if (to == null) return false
+    private fun moveFromSpam(messageId: String?, uid: Long?, to: IMAPFolder?): Boolean =
+        moveOutOfSpam(messageId, uid, to) == SpamMove.MOVED
+
+    /** What happened when moving an email out of spam. */
+    enum class SpamMove { MOVED, NOT_IN_SPAM, NO_FOLDER }
+
+    /** Moves an email out of spam to the bin ([toBin]) or the inbox. Throws when the mailbox can't be reached. */
+    fun moveOutOfSpam(messageId: String?, uid: Long?, toBin: Boolean): SpamMove = moveOutOfSpam(messageId, uid, if (toBin) trash() else inbox())
+
+    private fun moveOutOfSpam(messageId: String?, uid: Long?, to: IMAPFolder?): SpamMove {
+        val spam = spam() ?: return SpamMove.NO_FOLDER
+        if (to == null) return SpamMove.NO_FOLDER
         spam.open(Folder.READ_WRITE)
         try {
             val found: Array<Message> = when {
@@ -499,9 +535,9 @@ class MailSession(private val store: IMAPStore, private val provider: String, pr
                 uid != null -> listOfNotNull(spam.getMessageByUID(uid)).toTypedArray()
                 else -> emptyArray()
             }
-            if (found.isEmpty()) return false
+            if (found.isEmpty()) return SpamMove.NOT_IN_SPAM
             spam.moveMessages(found, to)
-            return true
+            return SpamMove.MOVED
         } finally {
             runCatching { spam.close(true) }
         }
