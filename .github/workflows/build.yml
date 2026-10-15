@@ -1,5 +1,8 @@
 name: Build
 
+# Add [release] to a commit message on main to also build the signed app and publish it under Releases.
+# The signing key comes from the repository's secrets and is never in the code.
+
 on:
   push:
     branches: [main]
@@ -37,3 +40,57 @@ jobs:
           name: test-report
           path: app/build/reports/tests/
           retention-days: 7
+
+  release:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[release]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$PASSWORD" ]; then
+            echo "Add the SIGNING_KEYSTORE_BASE64 and SIGNING_PASSWORD secrets first."; exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "SIGNING_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          # Builds 1 to 99 were made elsewhere; this carries on above them so updates install over them.
+          echo "BUILD_NUMBER=$((100 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+
+      - name: Build the signed app
+        env:
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+          SIGNING_KEY_ALIAS: brokeometer
+        run: ./gradlew --no-daemon assembleRelease
+
+      - name: Publish the app file
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm -f "$RUNNER_TEMP/release.jks"
+          cp "$(find app/build/outputs/apk/release -name '*.apk' | head -n 1)" DoubleOBroke.apk
+          # Only an app signed with your own key installs over the one on your phone.
+          signer="$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)"
+          if "$signer" verify --print-certs DoubleOBroke.apk | grep -q "CN=Android Debug"; then
+            echo "The app came out signed with the debug key, not yours. Check the two secrets."; exit 1
+          fi
+          gh release create "v0.1.$BUILD_NUMBER" DoubleOBroke.apk \
+            --target "${{ github.sha }}" \
+            --title "Double O Broke 0.1.$BUILD_NUMBER" \
+            --notes "Open this page on your phone, download DoubleOBroke.apk and tap it to install or update." \
+            --latest

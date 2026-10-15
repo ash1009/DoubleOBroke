@@ -6,7 +6,8 @@ plugins {
 }
 
 // Every online build gets a higher number, so a new build installs over the old one.
-val buildNumber = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
+// Release builds set BUILD_NUMBER, so the number keeps going up across every place the app was built.
+val buildNumber = (System.getenv("BUILD_NUMBER") ?: System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
 
 android {
     namespace = "app.brokeometer"
