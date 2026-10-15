@@ -76,6 +76,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     val history: StateFlow<List<TransactionEntity>> = dao.observeHistory().held(emptyList())
 
+    /** Money in and transfers, newest first, for the Money in page. */
+    val moneyMoves: StateFlow<List<app.brokeometer.data.MoneyMoveEntity>> = dao.observeMoves().held(emptyList())
+
+    /** Payments that money in paid back, by id. */
+    val paidBack: StateFlow<Map<Long, TransactionEntity>> =
+        dao.observePaidBack().map { list -> list.associateBy { it.id } }.held(emptyMap())
+
+    fun moneyMine(id: Long) = viewModelScope.launch { container.money.markMine(id) }
+
+    fun moneyOther(id: Long) = viewModelScope.launch { container.money.markOther(id) }
+
+    /** A transfer out that was really a payment: back to payments waiting. */
+    fun notATransfer(id: Long) = viewModelScope.launch {
+        val saved = container.money.notATransfer(id) ?: return@launch
+        notifier.showPending(saved, repository.catalog().label(saved.subcategoryId))
+    }
+
     val monthTotals: StateFlow<List<MonthTotal>> = dao.observeMonthTotals().held(emptyList())
 
     val dayTotals: StateFlow<List<DayTotal>> = dao.observeDayTotals().held(emptyList())
@@ -151,7 +168,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun testGemini() = viewModelScope.launch {
         _aiStatus.value = "Asking Gemini..."
         val outcome = container.ai.ask(
-            app.brokeometer.domain.AiPayment("Subway", "SUBWAY 58204-0", "London", "£4.20", "Thursday 13:05")
+            app.brokeometer.domain.AiPayment("Subway", "SUBWAY 58204-0", "London", "£4.20", "Thursday 13:05"),
+            useClaude = false,
         )
         _aiStatus.value = if (outcome.answer != null) {
             "Works. A £4.20 Subway at 1pm came back as ${outcome.note}."
@@ -233,9 +251,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val sameDay = Dates.localDate(original.occurredAt) == date
         val occurredAt = if (sameDay) original.occurredAt else Dates.middayMillis(date)
         val categoryChanged = original.subcategoryId != subcategoryId
+        // With money paid back, the amount shown is your share; what was paid moves with it.
+        val paid = original.paidMinor?.let { it + (amountMinor - original.amountMinor) }
         repository.save(
             original.copy(
                 amountMinor = amountMinor,
+                paidMinor = paid,
                 merchantName = label.trim().ifEmpty { original.merchantName },
                 occurredAt = occurredAt,
                 day = Dates.toDay(date),

@@ -88,6 +88,11 @@ data class TransactionEntity(
     val longitude: Double? = null,
     /** Metres. */
     val locationAccuracy: Float? = null,
+    /**
+     * What was really paid, when friends have paid some of it back. [amountMinor] is then your share,
+     * so every total counts only that. Null when nothing was paid back.
+     */
+    val paidMinor: Long? = null,
 )
 
 /** Examples the app starts with, taken from the owner's own August to October 2026 entries. */
@@ -127,3 +132,54 @@ data class CaptureLogEntity(
     val text: String,
     val outcome: String,
 )
+
+object MoveKind {
+    /** Between two of your own accounts. Never spending. */
+    const val TRANSFER = "TRANSFER"
+    /** Someone paying you back for a payment: that payment then counts only your share. */
+    const val PAYBACK = "PAYBACK"
+    /** Money in that is neither, such as a gift. */
+    const val OTHER = "OTHER"
+    /** Money in from someone else that you haven't said anything about yet. */
+    const val UNSORTED = "UNSORTED"
+}
+
+/**
+ * Money that isn't a payment: money coming in (direction IN), and money you sent to one of your own
+ * accounts (direction OUT, always a transfer). A transfer seen at both banks is two rows that point at
+ * each other.
+ */
+@Entity(
+    tableName = "money_moves",
+    indices = [Index("day"), Index("kind"), Index(value = ["sourceKey"], unique = true)],
+)
+data class MoneyMoveEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    /** "IN" or "OUT". */
+    val direction: String,
+    val kind: String,
+    val amountMinor: Long,
+    val currency: String,
+    /** Who sent it (IN) or who it went to (OUT), as the bank shows it. */
+    val counterparty: String,
+    val reference: String,
+    /** The alert's text, as sent. */
+    val descriptor: String,
+    /** "HSBC" or "Starling". */
+    val bank: String,
+    val account: String,
+    val occurredAt: Long,
+    val day: String,
+    /** The other side of a transfer between your own accounts. */
+    val pairId: Long? = null,
+    /** The payment this pays back. */
+    val paysBackId: Long? = null,
+    val sourceKey: String?,
+    val note: String = "",
+    val createdAt: Long,
+) {
+    companion object {
+        const val IN = "IN"
+        const val OUT = "OUT"
+    }
+}

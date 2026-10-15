@@ -117,6 +117,15 @@
             android:theme="@style/Theme.Broke.Sheet"
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- Opened by Paying back on a money in alert: pick the payment it pays back. -->
+        <activity
+            android:name=".ui.PaybackActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Broke.Sheet"
+            android:windowSoftInputMode="adjustResize" />
+
         <!-- Reads the bank's payment alerts once the user allows it in Android settings. -->
         <service
             android:name=".capture.PaymentListenerService"

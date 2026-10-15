@@ -151,7 +151,11 @@ class Repository(private val db: AppDatabase) {
         return updated
     }
 
-    suspend fun delete(id: Long) = dao.deleteTransaction(id)
+    /** Deletes a payment. Money in that paid some of it back is kept, as other money in. */
+    suspend fun delete(id: Long) {
+        dao.releasePaybacks(id)
+        dao.deleteTransaction(id)
+    }
 
     /** An entry typed in by hand, for example cash. Counted straight away. */
     suspend fun addManual(
@@ -225,15 +229,20 @@ class Repository(private val db: AppDatabase) {
     /** Everything in the database a backup needs. Settings and the picture are added by the caller. */
     suspend fun backupData(settings: BackupSettings, avatar: String?, appVersion: String): BackupData {
         ensureSeeded()
+        val transactions = dao.allTransactions()
+        val identity = transactions.associate { it.id to RestorePlanner.identity(it) }
+        val moves = dao.allMoves()
+        val keyOf = moves.associate { it.id to it.sourceKey }
         return BackupData(
             exportedAt = System.currentTimeMillis(),
             appVersion = appVersion,
             categories = dao.categories(),
             subcategories = dao.subcategories(),
-            transactions = dao.allTransactions(),
+            transactions = transactions,
             away = dao.awayRanges(),
             settings = settings,
             avatar = avatar,
+            moves = moves.map { m -> BackupMove(m, m.paysBackId?.let { identity[it] }, m.pairId?.let { keyOf[it] }) },
         )
     }
 
@@ -246,6 +255,7 @@ class Repository(private val db: AppDatabase) {
             existingIdentities = dao.allTransactions().mapTo(HashSet()) { RestorePlanner.identity(it) },
             existingAway = dao.awayRanges(),
             phoneGoals = phoneGoals,
+            existingMoveKeys = dao.allMoves().mapNotNullTo(HashSet()) { it.sourceKey },
         )
     }
 
@@ -273,6 +283,19 @@ class Repository(private val db: AppDatabase) {
         val rows = plan.rows.map { row -> row.copy(id = 0, subcategoryId = row.subcategoryId?.let { subMap[it] }) }
         val added = rows.chunked(400).sumOf { chunk -> dao.insertTransactions(chunk).count { it > 0 } }
         if (plan.away.isNotEmpty()) dao.insertAwayRanges(plan.away.map { it.copy(id = 0) })
+        if (plan.moves.isNotEmpty()) {
+            val idByIdentity = dao.allTransactions().associate { RestorePlanner.identity(it) to it.id }
+            val inserted = plan.moves.map { b ->
+                val paysBack = b.paysBack?.let { idByIdentity[it] }
+                val kind = if (b.move.kind == MoveKind.PAYBACK && paysBack == null) MoveKind.OTHER else b.move.kind
+                b to dao.insertMove(b.move.copy(id = 0, pairId = null, paysBackId = paysBack, kind = kind))
+            }
+            val idByKey = dao.allMoves().mapNotNull { m -> m.sourceKey?.let { it to m.id } }.toMap()
+            for ((b, id) in inserted) {
+                val pair = b.pairKey?.let { idByKey[it] } ?: continue
+                if (id > 0) dao.move(id)?.let { dao.updateMove(it.copy(pairId = pair)) }
+            }
+        }
         added to subMap
     }
 

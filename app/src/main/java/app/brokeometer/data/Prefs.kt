@@ -45,6 +45,21 @@ class Prefs(context: Context) {
     private val _hiddenRegulars = MutableStateFlow(sp.getStringSet(KEY_HIDDEN_REGULARS, emptySet())?.toSet() ?: emptySet())
     val hiddenRegulars: StateFlow<Set<String>> = _hiddenRegulars
 
+    /**
+     * Names your banks use for you, learned from transfers between your own accounts ("MORGAN A",
+     * "ALEX MORGAN"), on top of the name in your profile.
+     */
+    private val _ownNames = MutableStateFlow(sp.getStringSet(KEY_OWN_NAMES, emptySet())?.toSet() ?: emptySet())
+    val ownNames: StateFlow<Set<String>> = _ownNames
+
+    fun learnOwnName(name: String) {
+        val clean = name.trim().uppercase()
+        if (clean.split(' ').count { it.isNotBlank() } < 2 || clean in _ownNames.value) return
+        val value = _ownNames.value + clean
+        sp.edit().putStringSet(KEY_OWN_NAMES, value).apply()
+        _ownNames.value = value
+    }
+
     fun hideRegular(key: String) = setHiddenRegulars(_hiddenRegulars.value + key)
 
     fun showAllRegulars() = setHiddenRegulars(emptySet())
@@ -309,6 +324,7 @@ class Prefs(context: Context) {
 
         private const val KEY_THEME = "theme"
         private const val KEY_USERNAME = "username"
+        private const val KEY_OWN_NAMES = "own_names"
         private const val KEY_AVATAR_VERSION = "avatar_version"
         private const val KEY_KEEP_ALERTS = "keep_alerts"
         private const val KEY_TEST_MODE = "test_mode"

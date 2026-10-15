@@ -42,7 +42,11 @@ fun EntryRow(
         titleIsSub -> category?.name
         else -> catalog.label(entry.subcategoryId)
     }
-    val secondLine = listOfNotNull(filedAs, entry.place.ifBlank { null }, detail.ifBlank { null }).joinToString(", ")
+    // Friends paid some back: the amount is your share, and this says what was paid.
+    val paidBack = entry.paidMinor?.let { paid ->
+        "paid ${Money.format(paid, entry.currency)}, ${Money.format(paid - entry.amountMinor, entry.currency)} back"
+    }
+    val secondLine = listOfNotNull(filedAs, entry.place.ifBlank { null }, detail.ifBlank { null }, paidBack).joinToString(", ")
     Row(
         modifier = modifier
             .fillMaxWidth()

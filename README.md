@@ -22,9 +22,11 @@ Each part of the app is an agent that does a job in the background and asks you 
 
 ### Money
 - Reads bank payment notifications (HSBC UK, plus ICICI Bank SMS from India) and turns each one into a payment waiting for you to **Accept** or **Update**, straight from the notification.
-- Guesses the category from your own past choices (same shop, similar names, time of day, amount). For a shop it has never seen, it can ask an AI model (Gemini or Claude).
+- Guesses the category from your own past choices (same shop, similar names, time of day, amount). For a shop it has never seen, it asks an AI model: Claude first, Gemini when Claude can't answer.
 - **Add by voice**: say "3.40 for the tube at Vauxhall" and it is saved, with the amount read on the phone and the category picked by AI.
 - **Insights**: runway (how long your savings last), a daily allowance, categories against a usual month, no-spend days, regular payments and a year recap. Category caps send a nudge at 80% and when you go over.
+- **Money in** from HSBC and Starling is listed on its own and never counted as spending. Money moved between your own accounts is a transfer: the two banks' alerts are paired by their shared reference (or your name), in whichever order they arrive. An equal amount alone is never enough.
+- **Paid back:** money from a friend asks whether it pays you back for something. Pick the payment and it counts only your share everywhere (paid £60, £40 back: £20 spent).
 - Other currencies are converted at that day's European Central Bank rate.
 
 ### Email
@@ -76,8 +78,8 @@ Background work runs on **WorkManager** (nightly trip check, email checks, weekl
 
 | Package | What's in it |
 |---|---|
-| `capture` | Notification listener, payment capture, AI category guesses, voice entry |
-| `domain` | Bank message parsers, categoriser, CSV import |
+| `capture` | Notification listener, payment capture, money in and transfers, AI category guesses, voice entry |
+| `domain` | Bank message parsers (HSBC, Starling, ICICI), transfer matching, categoriser, CSV import |
 | `data` | Room database, preferences, backups, Claude and Gemini clients |
 | `insights` | Runway, allowances, patterns, currency conversion |
 | `mail` | IMAP client, inbox agent, prompts, OTP codes, notifications |
@@ -116,7 +118,7 @@ Release builds are signed with a key from the environment when one is given (`SI
 
 ## Tests
 
-127 unit tests cover the parts with the most logic: bank message parsing, category guessing, CSV import and backups, trip finding and fares, the day timeline, screen time maths and limit rules, email prompts and actions, and the vault's encryption and import.
+138 unit tests cover the parts with the most logic: bank message parsing, money in and transfer matching, category guessing, CSV import and backups, trip finding and fares, the day timeline, screen time maths and limit rules, email prompts and actions, and the vault's encryption and import.
 
 During development, the app also ran on an Android emulator in CI, which tapped through it with made-up data and saved the screenshots above.
 
@@ -126,4 +128,4 @@ A personal project by [Aashish Biradar](https://aashish-n-biradar.netlify.app), 
 
 Fonts: Bricolage Grotesque and Instrument Sans, under the SIL Open Font License (see `licenses/`).
 
-Not affiliated with HSBC, ICICI Bank, Google, Yahoo or Transport for London.
+Not affiliated with HSBC, Starling Bank, ICICI Bank, Google, Yahoo or Transport for London.

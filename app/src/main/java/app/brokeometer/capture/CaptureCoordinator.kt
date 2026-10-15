@@ -8,6 +8,9 @@ import app.brokeometer.domain.GuessSource
 import app.brokeometer.domain.HsbcParser
 import app.brokeometer.domain.IciciParser
 import app.brokeometer.domain.ParseResult
+import app.brokeometer.domain.ParsedMoneyIn
+import app.brokeometer.domain.StarlingParser
+import app.brokeometer.domain.StarlingResult
 import app.brokeometer.util.Dates
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -24,6 +27,7 @@ class CaptureCoordinator(
     private val prefs: Prefs,
     private val scope: CoroutineScope,
     private val ai: AiGuesser,
+    private val money: MoneyAgent,
 ) {
     /** The trip check, set once the app is put together: it keeps card charges and Oyster top-ups from counting twice. */
     var travel: app.brokeometer.travel.TravelAgent? = null
@@ -56,6 +60,19 @@ class CaptureCoordinator(
         /** True when re-reading alerts that were already in the shade, where repeats are expected. */
         replay: Boolean = false,
     ): Boolean {
+        val starling = packageName.contains("starling", ignoreCase = true) ||
+            (source == TxSource.TEST && title?.trim()?.startsWith(StarlingParser.BANK, ignoreCase = true) == true)
+        if (starling) {
+            when (val result = StarlingParser.parse(title, text)) {
+                is StarlingResult.Ignored -> if (!replay) repository.log(packageName, title, text, "Skipped: ${result.reason}")
+                is StarlingResult.MoneyIn -> onMoneyIn(result.money, packageName, alertKey, postedAt, title, text, replay)
+            }
+            return false
+        }
+        HsbcParser.parseMoneyIn(title, text)?.let { moneyIn ->
+            onMoneyIn(moneyIn, packageName, alertKey, postedAt, title, text, replay)
+            return false
+        }
         when (val result = HsbcParser.parse(title, text)) {
             is ParseResult.Ignored -> {
                 if (!replay) repository.log(packageName, title, text, "Skipped: ${result.reason}")
@@ -66,6 +83,11 @@ class CaptureCoordinator(
                 if (t != null && t.isOysterTopUp(result.payment.merchantKey, result.payment.merchantName)) {
                     // Trips are counted one by one, so the top-up itself isn't spending.
                     if (!replay) repository.log(packageName, title, text, "Oyster top-up: not counted, your trips count instead")
+                    return false
+                }
+                if (money.onMoneyOut(result.payment, HsbcParser.BANK, postedAt, "$alertKey|$postedAt")) {
+                    // Money to one of your own accounts moves money, it doesn't spend it.
+                    if (!replay) repository.log(packageName, title, text, "Transfer to your own account: noted on Money in, not a payment")
                     return false
                 }
                 val saved = repository.capture(result.payment, postedAt, "$alertKey|$postedAt", source)
@@ -97,6 +119,29 @@ class CaptureCoordinator(
                 // Only clear the bank's alert when ours can be seen, so a payment never goes unnoticed.
                 return notifier.canPost()
             }
+        }
+    }
+
+    /** Money in at HSBC or Starling: a transfer from yourself is just noted; from anyone else, you're asked. */
+    private suspend fun onMoneyIn(
+        moneyIn: ParsedMoneyIn,
+        packageName: String,
+        alertKey: String,
+        postedAt: Long,
+        title: String?,
+        text: String?,
+        replay: Boolean,
+    ) {
+        val saved = money.onMoneyIn(moneyIn, postedAt, "${moneyIn.bank.lowercase()}|$alertKey|$postedAt")
+        if (saved == null) {
+            if (!replay) repository.log(packageName, title, text, "Money in: already noted")
+            return
+        }
+        if (saved.kind == app.brokeometer.data.MoveKind.TRANSFER) {
+            repository.log(packageName, title, text, "Money in: a transfer from your own account" + (if (saved.pairId != null) ", matched" else ""))
+        } else {
+            repository.log(packageName, title, text, "Money in: asking if it pays you back")
+            notifier.showMoneyIn(saved)
         }
     }
 

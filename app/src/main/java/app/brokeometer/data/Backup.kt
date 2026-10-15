@@ -20,6 +20,18 @@ data class BackupData(
     val avatar: String?,
     /** The password vault, still encrypted with the master password, or null. */
     val vault: String? = null,
+    /** Money in and transfers. */
+    val moves: List<BackupMove> = emptyList(),
+)
+
+/**
+ * A money in or transfer row in a backup. Row ids differ between phones, so the payment it pays back is
+ * kept by that payment's identity, and the other side of a transfer by its alert key.
+ */
+data class BackupMove(
+    val move: MoneyMoveEntity,
+    val paysBack: String? = null,
+    val pairKey: String? = null,
 )
 
 data class BackupSettings(
@@ -58,6 +70,7 @@ object BackupCodec {
             }
         })
         root.put("transactions", JSONArray().apply { data.transactions.forEach { put(transactionJson(it)) } })
+        root.put("moneyMoves", JSONArray().apply { data.moves.forEach { put(moveJson(it)) } })
         root.put("away", JSONArray().apply {
             data.away.forEach { a -> put(JSONObject().put("startDay", a.startDay).put("endDay", a.endDay).put("label", a.label)) }
         })
@@ -101,6 +114,27 @@ object BackupCodec {
         putOpt("latitude", t.latitude)
         putOpt("longitude", t.longitude)
         putOpt("locationAccuracy", t.locationAccuracy?.toDouble())
+        putOpt("paidMinor", t.paidMinor)
+    }
+
+    private fun moveJson(b: BackupMove): JSONObject = JSONObject().apply {
+        val m = b.move
+        put("direction", m.direction)
+        put("kind", m.kind)
+        put("amountMinor", m.amountMinor)
+        put("currency", m.currency)
+        put("counterparty", m.counterparty)
+        put("reference", m.reference)
+        put("descriptor", m.descriptor)
+        put("bank", m.bank)
+        put("account", m.account)
+        put("occurredAt", m.occurredAt)
+        put("day", m.day)
+        putOpt("sourceKey", m.sourceKey)
+        put("note", m.note)
+        put("createdAt", m.createdAt)
+        putOpt("paysBack", b.paysBack)
+        putOpt("pairKey", b.pairKey)
     }
 
     fun read(text: String): BackupData {
@@ -154,6 +188,29 @@ object BackupCodec {
                     latitude = t.doubleOrNull("latitude"),
                     longitude = t.doubleOrNull("longitude"),
                     locationAccuracy = t.doubleOrNull("locationAccuracy")?.toFloat(),
+                    paidMinor = t.longOrNull("paidMinor"),
+                )
+            }
+            val moves = root.objects("moneyMoves").map { m ->
+                BackupMove(
+                    move = MoneyMoveEntity(
+                        direction = m.getString("direction"),
+                        kind = m.getString("kind"),
+                        amountMinor = m.getLong("amountMinor"),
+                        currency = m.getString("currency"),
+                        counterparty = m.optString("counterparty"),
+                        reference = m.optString("reference"),
+                        descriptor = m.optString("descriptor"),
+                        bank = m.optString("bank"),
+                        account = m.optString("account"),
+                        occurredAt = m.getLong("occurredAt"),
+                        day = m.getString("day"),
+                        sourceKey = m.stringOrNull("sourceKey"),
+                        note = m.optString("note"),
+                        createdAt = m.optLong("createdAt", 0),
+                    ),
+                    paysBack = m.stringOrNull("paysBack"),
+                    pairKey = m.stringOrNull("pairKey"),
                 )
             }
             val away = root.objects("away").map { a ->
@@ -189,6 +246,7 @@ object BackupCodec {
                 settings = settings,
                 avatar = root.stringOrNull("avatar"),
                 vault = root.stringOrNull("vault"),
+                moves = moves,
             )
         } catch (e: JSONException) {
             throw ImportFormatException("This backup is damaged and could not be read.")
@@ -222,10 +280,12 @@ data class RestorePlan(
     val restoresGoals: Boolean,
     /** The password vault, used only when the phone has none. */
     val restoresVault: Boolean = false,
+    /** Money in and transfers the phone doesn't have yet. */
+    val moves: List<BackupMove> = emptyList(),
 ) {
     val firstDay: String? = rows.minOfOrNull { it.day }
     val lastDay: String? = rows.maxOfOrNull { it.day }
-    val isEmpty: Boolean get() = rows.isEmpty() && away.isEmpty() && missingSubs.isEmpty() && !restoresGoals && !restoresVault
+    val isEmpty: Boolean get() = rows.isEmpty() && away.isEmpty() && missingSubs.isEmpty() && !restoresGoals && !restoresVault && moves.isEmpty()
 }
 
 object RestorePlanner {
@@ -240,6 +300,7 @@ object RestorePlanner {
         existingIdentities: Set<String>,
         existingAway: List<AwayRangeEntity>,
         phoneGoals: Goals,
+        existingMoveKeys: Set<String> = emptySet(),
     ): RestorePlan {
         val backupCategories = backup.categories.associateBy { it.id }
         val phoneByCode = catalog.subcategories.mapNotNull { s -> s.code?.let { it to s.id } }.toMap()
@@ -289,6 +350,8 @@ object RestorePlanner {
             newCategories = newCategories,
             alreadyThere = alreadyThere,
             restoresGoals = phoneGoals.isEmpty && !backup.settings.goals.isEmpty,
+            moves = backup.moves.filter { it.move.sourceKey == null || it.move.sourceKey !in existingMoveKeys }
+                .distinctBy { it.move.sourceKey ?: "${it.move.occurredAt}|${it.move.amountMinor}" },
         )
     }
 

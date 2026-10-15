@@ -3,6 +3,7 @@ package app.brokeometer
 import android.app.Application
 import app.brokeometer.capture.AiGuesser
 import app.brokeometer.capture.CaptureCoordinator
+import app.brokeometer.capture.MoneyAgent
 import app.brokeometer.capture.LocationFetcher
 import app.brokeometer.capture.Notifier
 import app.brokeometer.capture.NudgeWatcher
@@ -69,13 +70,14 @@ class AppContainer(app: BrokeApp) {
     val notifier = Notifier(app, prefs)
     val location = LocationFetcher(app)
     val gemini = GeminiClient(prefs)
-    val ai = AiGuesser(repository, gemini)
-    val capture = CaptureCoordinator(repository, notifier, location, prefs, app.scope, ai)
+    val claude = ClaudeClient(prefs)
+    val ai = AiGuesser(repository, claude, gemini)
+    val money = MoneyAgent(database, repository, prefs, notifier)
+    val capture = CaptureCoordinator(repository, notifier, location, prefs, app.scope, ai, money)
     val fx = FxUpdater(repository.dao)
     val nudges = NudgeWatcher(repository.dao, prefs, notifier)
     val vault = VaultManager(app, app.scope)
     val backups = BackupManager(app, repository, prefs, vault)
-    val claude = ClaudeClient(prefs)
     val mailDatabase: MailDatabase = MailDatabase.create(app)
     val mail = MailAgent(app, mailDatabase.dao(), prefs, claude, gemini, app.scope)
     val mailNotifier = MailNotifier(app)

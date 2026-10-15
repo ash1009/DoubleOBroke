@@ -28,7 +28,8 @@ sealed interface ParseResult {
  *   title: "Money Out"
  *   text:  "£15.55 transaction | SUBWAY 58204-0    LONDON          GB | BANK A/C"
  *
- * Everything else ("Money In", "Payment attempt - action needed", 1p card checks) is ignored.
+ * Everything else ("Payment attempt - action needed", 1p card checks) is ignored. "Money In" is read
+ * separately by [parseMoneyIn], as money in, never as a payment.
  */
 object HsbcParser {
 
@@ -48,16 +49,7 @@ object HsbcParser {
 
         val match = amountPart.find(parts.first()) ?: return ParseResult.Ignored("No amount found")
         val currency = currencyFor(match.groupValues[1])
-        val amountMinor = try {
-            BigDecimal(match.groupValues[2].replace(",", ""))
-                .setScale(2, RoundingMode.HALF_UP)
-                .movePointRight(2)
-                .longValueExact()
-        } catch (e: ArithmeticException) {
-            return ParseResult.Ignored("Amount not readable")
-        } catch (e: NumberFormatException) {
-            return ParseResult.Ignored("Amount not readable")
-        }
+        val amountMinor = minorOf(match.groupValues[2]) ?: return ParseResult.Ignored("Amount not readable")
         if (amountMinor < SMALLEST_REAL_PAYMENT_MINOR) return ParseResult.Ignored("Card check, not a payment")
 
         val rawDescriptor: String
@@ -85,7 +77,47 @@ object HsbcParser {
         )
     }
 
-    private fun currencyFor(prefix: String): String {
+    /**
+     * Reads a "Money In" alert, which looks like Money Out:
+     *   "£100.00 transaction | MORGAN A   STARLING-k3pQ9xz | BANK A/C"
+     * The middle part names who sent it and usually carries their reference.
+     */
+    fun parseMoneyIn(title: String?, text: String?): ParsedMoneyIn? {
+        if (!title?.trim().orEmpty().equals("Money In", ignoreCase = true)) return null
+        val parts = text.orEmpty().split('|')
+        if (parts.size < 2) return null
+        val match = amountPart.find(parts.first()) ?: return null
+        val amountMinor = minorOf(match.groupValues[2]) ?: return null
+        if (amountMinor <= 0) return null
+        val middle = if (parts.size >= 3) parts.subList(1, parts.size - 1).joinToString("|") else parts[1]
+        val account = if (parts.size >= 3) parts.last().trim().replace(Regex("""\s+"""), " ") else ""
+        val descriptor = middle.trim().replace(Regex("""\s+"""), " ")
+        return ParsedMoneyIn(
+            amountMinor = amountMinor,
+            currency = currencyFor(match.groupValues[1]),
+            from = MoneyText.nameOf(descriptor).ifBlank { descriptor },
+            reference = MoneyText.referencesOf(descriptor).firstOrNull().orEmpty(),
+            descriptor = descriptor,
+            bank = BANK,
+            account = account,
+        )
+    }
+
+    const val BANK = "HSBC"
+
+    /** "1,234.5" to 123450. Null when it isn't a number. */
+    internal fun minorOf(number: String): Long? = try {
+        BigDecimal(number.replace(",", ""))
+            .setScale(2, RoundingMode.HALF_UP)
+            .movePointRight(2)
+            .longValueExact()
+    } catch (e: ArithmeticException) {
+        null
+    } catch (e: NumberFormatException) {
+        null
+    }
+
+    internal fun currencyFor(prefix: String): String {
         val p = prefix.trim()
         return when {
             p.isEmpty() || p == "£" || p.equals("GBP", ignoreCase = true) -> "GBP"

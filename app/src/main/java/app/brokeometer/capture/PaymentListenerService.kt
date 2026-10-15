@@ -11,7 +11,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Android hands this service every notification once the user turns on notification access.
- * Only HSBC's are looked at; everything else is dropped without being read. For App limits, it also
+ * Only HSBC's and Starling's are looked at; everything else is dropped without being read. For App limits, it also
  * notes when an Instagram message notification is tapped (not what it says).
  */
 class PaymentListenerService : NotificationListenerService() {
@@ -42,7 +42,7 @@ class PaymentListenerService : NotificationListenerService() {
         val sender = sbn.packageName ?: return
         if (sender == packageName) return
 
-        val fromBank = sender.contains("hsbc", ignoreCase = true)
+        val fromBank = sender.contains("hsbc", ignoreCase = true) || sender.contains("starling", ignoreCase = true)
         val fromTest = sender == SHELL_PACKAGE && app.container.prefs.testMode
         val fromMessages = MESSAGING_HINTS.any { sender.contains(it, ignoreCase = true) }
         val fromMailApp = MailAppAlerts.isMailApp(sbn, app.container.prefs.testMode)
@@ -116,7 +116,7 @@ class PaymentListenerService : NotificationListenerService() {
                     source = if (fromTest) TxSource.TEST else TxSource.BANK,
                     replay = replay,
                 )
-                // The payment is in the app now, so HSBC's own alert is a duplicate.
+                // The payment is in the app now, so the bank's own alert is a duplicate.
                 if (stored) clearBankAlert(key)
             } catch (e: Exception) {
                 app.container.repository.log(sender, title, text, "Problem: ${e.javaClass.simpleName}")

@@ -7,7 +7,10 @@ import app.brokeometer.BrokeApp
 import app.brokeometer.mail.MailNotifier
 import kotlinx.coroutines.launch
 
-/** Handles the Accept button on a payment alert, and Copy code, Mark read and Archive on an email from the agent. */
+/**
+ * Handles the Accept button on a payment alert, My account and Other on a money in alert, and Copy code,
+ * Mark read and Archive on an email from the agent.
+ */
 class ActionReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -19,6 +22,10 @@ class ActionReceiver : BroadcastReceiver() {
             mail(context, intent)
             return
         }
+        if (intent.action == Notifier.ACTION_MONEY_MINE || intent.action == Notifier.ACTION_MONEY_OTHER) {
+            money(context, intent)
+            return
+        }
         if (intent.action != Notifier.ACTION_ACCEPT) return
         val id = intent.getLongExtra(Notifier.EXTRA_TX_ID, -1L)
         if (id < 0) return
@@ -27,6 +34,23 @@ class ActionReceiver : BroadcastReceiver() {
         app.scope.launch {
             try {
                 if (app.container.repository.accept(id)) app.container.notifier.cancel(id)
+            } finally {
+                result.finish()
+            }
+        }
+    }
+
+    /** My account or Other on a money in alert. */
+    private fun money(context: Context, intent: Intent) {
+        val id = intent.getLongExtra(Notifier.EXTRA_MOVE_ID, -1L)
+        if (id < 0) return
+        val app = context.applicationContext as? BrokeApp ?: return
+        app.container.notifier.cancelMoneyIn(id)
+        val result = goAsync()
+        app.scope.launch {
+            try {
+                if (intent.action == Notifier.ACTION_MONEY_MINE) app.container.money.markMine(id)
+                else app.container.money.markOther(id)
             } finally {
                 result.finish()
             }

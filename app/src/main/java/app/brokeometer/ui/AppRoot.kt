@@ -97,11 +97,12 @@ object Routes {
     const val EMAIL_SETUP = "email/setup"
     const val MORE = "more"
     const val LIMITS = "limits"
+    const val MONEY_IN = "money/in"
 
-    val all = setOf(HOME, INSIGHTS, RECAP, PENDING, MONTHS, CATEGORIES, SETTINGS, ACCOUNT, LOG, EMAIL, PASSWORDS, TRAVEL, MONEY, EMAIL_SETUP, MORE, LIMITS)
+    val all = setOf(HOME, INSIGHTS, RECAP, PENDING, MONTHS, CATEGORIES, SETTINGS, ACCOUNT, LOG, EMAIL, PASSWORDS, TRAVEL, MONEY, EMAIL_SETUP, MORE, LIMITS, MONEY_IN)
 
     /** Pages of the main screen (Home and the agents), as opposed to pages of their own. */
-    val main = setOf(HOME, INSIGHTS, PENDING, MONTHS, CATEGORIES, EMAIL, TRAVEL, MONEY, MORE)
+    val main = setOf(HOME, INSIGHTS, PENDING, MONTHS, CATEGORIES, EMAIL, TRAVEL, MONEY, MORE, MONEY_IN)
 }
 
 private data class MenuEntry(val route: String, val label: String, val icon: ImageVector)

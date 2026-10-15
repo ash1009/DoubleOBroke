@@ -183,6 +183,50 @@ interface BrokeDao {
     @Insert
     suspend fun insertStarterExamples(rows: List<StarterExampleEntity>)
 
+    // Money in and transfers
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertMove(move: MoneyMoveEntity): Long
+
+    @Update
+    suspend fun updateMove(move: MoneyMoveEntity)
+
+    @Query("SELECT * FROM money_moves WHERE id = :id")
+    suspend fun move(id: Long): MoneyMoveEntity?
+
+    @Query("DELETE FROM money_moves WHERE id = :id")
+    suspend fun deleteMove(id: Long)
+
+    /** Moves close in time to [from]..[to], for pairing the two sides of a transfer. */
+    @Query("SELECT * FROM money_moves WHERE occurredAt BETWEEN :from AND :to ORDER BY occurredAt")
+    suspend fun movesBetween(from: Long, to: Long): List<MoneyMoveEntity>
+
+    /** Payments close in time, for spotting one that was really a transfer to your own account. */
+    @Query("SELECT * FROM transactions WHERE source = 'BANK' AND occurredAt BETWEEN :from AND :to ORDER BY occurredAt")
+    suspend fun bankPaymentsBetween(from: Long, to: Long): List<TransactionEntity>
+
+    @Query("UPDATE money_moves SET kind = 'OTHER', paysBackId = NULL WHERE paysBackId = :txId")
+    suspend fun releasePaybacks(txId: Long)
+
+    @Query("SELECT * FROM money_moves WHERE paysBackId = :txId")
+    suspend fun paybacksFor(txId: Long): List<MoneyMoveEntity>
+
+    @Query("SELECT * FROM money_moves ORDER BY occurredAt DESC, id DESC")
+    fun observeMoves(): Flow<List<MoneyMoveEntity>>
+
+    @Query("SELECT * FROM money_moves ORDER BY id")
+    suspend fun allMoves(): List<MoneyMoveEntity>
+
+    /** The payments money in has paid back, for naming them on the Money in page. */
+    @Query("SELECT * FROM transactions WHERE id IN (SELECT paysBackId FROM money_moves WHERE paysBackId IS NOT NULL)")
+    fun observePaidBack(): Flow<List<TransactionEntity>>
+
+    /** Payments that money in could be paying back: the newest first. */
+    @Query(
+        "SELECT * FROM transactions WHERE source != 'TEST' AND currency = :currency AND occurredAt >= :since " +
+            "ORDER BY occurredAt DESC, id DESC LIMIT 60"
+    )
+    suspend fun paymentsSince(currency: String, since: Long): List<TransactionEntity>
+
     // Alert log
     @Insert
     suspend fun insertLog(row: CaptureLogEntity)

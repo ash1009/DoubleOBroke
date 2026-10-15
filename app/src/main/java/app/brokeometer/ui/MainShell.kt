@@ -75,6 +75,7 @@ import app.brokeometer.ui.screens.EmailPage
 import app.brokeometer.ui.screens.HomeActions
 import app.brokeometer.ui.screens.HomePage
 import app.brokeometer.ui.screens.InsightsScreen
+import app.brokeometer.ui.screens.MoneyInScreen
 import app.brokeometer.ui.screens.MoneyThisMonthPage
 import app.brokeometer.ui.screens.MonthScreen
 import app.brokeometer.ui.screens.MorePage
@@ -95,7 +96,7 @@ import kotlin.math.abs
 enum class Section(val key: String, val label: String, val pages: List<String>, val icon: ImageVector) {
     HOME("home", "Home", listOf("Home"), Icons.Rounded.Home),
     EMAIL("email", "Email", emailPageNames, Icons.Rounded.Mail),
-    MONEY("money", "Money", listOf("This month", "Payments", "Insights", "Months", "Categories"), Icons.Rounded.Speed),
+    MONEY("money", "Money", listOf("This month", "Payments", "Insights", "Months", "Categories", "Money in"), Icons.Rounded.Speed),
     TRAVEL("travel", "Travel", listOf("Activity", "Setup"), Icons.Rounded.DirectionsSubway),
     /** Features that don't need a place of their own in the bar: App limits, Passwords, and ones to come. */
     MORE("more", "More", listOf("More"), Icons.Rounded.MoreHoriz),
@@ -125,6 +126,7 @@ fun shellPageFor(route: String): Pair<Section, Int>? = when (route) {
     Routes.INSIGHTS -> Section.MONEY to 2
     Routes.MONTHS -> Section.MONEY to 3
     Routes.CATEGORIES -> Section.MONEY to 4
+    Routes.MONEY_IN -> Section.MONEY to 5
     Routes.TRAVEL -> Section.TRAVEL to 0
     Routes.MORE -> Section.MORE to 0
     else -> null
@@ -338,7 +340,8 @@ fun MainShell(app: AppViewModel, target: String?, onTargetHandled: () -> Unit, l
                         1 -> PaymentsScreen(app)
                         2 -> InsightsScreen(app, onOpenRecap = links.recap)
                         3 -> MonthScreen(app)
-                        else -> CategoriesScreen(app)
+                        4 -> CategoriesScreen(app)
+                        else -> MoneyInScreen(app)
                     }
                     Section.TRAVEL -> TravelPage(page.inner, travel, list, onOpenPayments = { go(Section.MONEY, 1) }, onOpenSetup = { go(Section.TRAVEL, 1) })
                     Section.MORE -> MorePage(limits, vault, list, onLimits = { links.limits(0) }, onPasswords = links.passwords)
