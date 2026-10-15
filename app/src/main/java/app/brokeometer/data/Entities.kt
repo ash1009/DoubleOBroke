@@ -95,7 +95,7 @@ data class TransactionEntity(
     val paidMinor: Long? = null,
 )
 
-/** Examples the app starts with, taken from the owner's own August to October 2026 entries. */
+/** Examples the app starts with: common shops, made up, until the owner's own choices take over. */
 @Entity(tableName = "starter_examples")
 data class StarterExampleEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,

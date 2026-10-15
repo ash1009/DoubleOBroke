@@ -33,33 +33,23 @@ object Seed {
     private fun s(key: String, code: String, amountMinor: Long, hour: Int? = null) = Starter(key, code, hour, amountMinor)
 
     /**
-     * How the owner filed real payments between August and October 2026, found by matching
-     * the HSBC statement against the expense sheet. Statements carry no time of day, so most
-     * examples have no hour and the clock decides between lunch and dinner.
+     * Made-up examples of common shops, so a new phone can guess from the very first payment.
+     * The owner's own choices take over as soon as a few payments are filed.
      */
     val starters: List<Starter> = listOf(
-        s("UBER EATS", "food.lunch", 1760), s("UBER EATS", "food.lunch", 1893), s("UBER EATS", "food.lunch", 1703),
-        s("UBER EATS", "food.lunch", 1495), s("UBER EATS", "food.lunch", 1912), s("UBER EATS", "food.lunch", 1893),
-        s("UBER EATS", "food.dinner", 1818), s("UBER EATS", "food.dinner", 2182), s("UBER EATS", "food.dinner", 2102),
-        s("UBER EATS", "food.dinner", 1730), s("UBER EATS", "food.dinner", 1427),
-        s("UBER TRIP", "travel.cab", 8162), s("UBER TRIP", "travel.cab", 642), s("UBER TRIP", "travel.cab", 608),
-        s("TFL TRAVEL CHARGE", "travel.bus", 175), s("TFL TRAVEL CHARGE", "travel.bus", 175),
-        s("TFL TRAVEL CHARGE", "travel.metro", 1560),
-        s("TFL TRAVEL CH", "travel.bus", 175), s("TFL TRAVEL CH", "travel.metro", 1560),
-        s("SAINSBURYS MKTS", "grocery.eatery", 1015), s("SAINSBURYS MKTS", "grocery.eatery", 655),
-        s("EE TOPUP VESTA", "bills.phone", 1000),
-        s("GOOGLE PLAY APPS", "entertainment.game", 499),
-        s("SUBWAY", "food.lunch", 1555, hour = 15),
-        s("ORIGINAL BIRYANIWA", "food.dinner", 1300),
-        s("NYX GMGVENDING", "food.others", 300),
-        s("DONDON LTD", "food.lunch", 1500),
-        s("HEAVENLY DESSERTS", "food.dinner", 1190),
-        s("LEBANESE FOOD", "food.others", 150),
-        s("LEBANESE KITCHEN", "food.dinner", 700),
-        s("SUMUP BIRYANI GUY", "food.dinner", 1398),
-        s("TASTE OF LAHORE", "food.lunch", 2250),
-        s("SSP", "food.lunch", 1631),
-        s("WH SMITH CURIOC", "food.others", 469),
-        s("MASABI GRT PAY", "travel.bus", 160),
+        s("UBER EATS", "food.lunch", 1650), s("UBER EATS", "food.dinner", 1900),
+        s("UBER TRIP", "travel.cab", 1200),
+        s("TFL TRAVEL CHARGE", "travel.metro", 290), s("TFL TRAVEL CHARGE", "travel.bus", 175),
+        s("TFL TRAVEL CH", "travel.metro", 290),
+        s("TESCO STORES", "grocery.eatery", 1200), s("SAINSBURYS", "grocery.eatery", 900),
+        s("PRET A MANGER", "food.breakfast", 450, hour = 9), s("PRET A MANGER", "food.lunch", 750, hour = 13),
+        s("GREGGS", "food.breakfast", 350, hour = 8),
+        s("NANDOS", "food.dinner", 1600),
+        s("SUBWAY", "food.lunch", 650, hour = 13),
+        s("EE", "bills.phone", 1500),
+        s("SPOTIFY", "entertainment.subscriptions", 1199),
+        s("NETFLIX", "entertainment.subscriptions", 1099),
+        s("BOOTS", "health.medicine", 600),
+        s("TRAINLINE", "travel.train", 2500),
     )
 }
