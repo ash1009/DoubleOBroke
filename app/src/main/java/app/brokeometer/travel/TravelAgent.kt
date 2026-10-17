@@ -78,17 +78,25 @@ class TravelAgent(
         val catalog = repository.catalog()
         val metro = catalog.subcategories.firstOrNull { it.code == "travel.metro" }?.id
         val bus = catalog.subcategories.firstOrNull { it.code == "travel.bus" }?.id
+        fun noteFor(p: PricedTrip) = buildString {
+            val t = p.trip
+            append("${Dates.clock(t.startAt)} to ${Dates.clock(t.endAt)}. ${p.note}.")
+            if (t.kind == TripKind.RAIL && t.via.isNotEmpty()) append(" Likely ${t.via.joinToString(", ")}.")
+        }
         for (p in priced) {
             val t = p.trip
-            if (t in onCard || existing.any { overlaps(it, t) }) {
+            val same = existing.firstOrNull { overlaps(it, t) }
+            if (t in onCard || same != null) {
+                // Found again. If it's still waiting for you and its fare has changed (this check found an
+                // earlier bus, so this one is free under the Hopper, say), the new fare replaces the old.
+                if (same != null && same.status == TxStatus.PENDING && same.amountMinor != p.pence) {
+                    repository.dao.updateTransaction(same.copy(amountMinor = p.pence, note = noteFor(p)))
+                }
                 already++
                 continue
             }
             val name = if (t.kind == TripKind.RAIL) "Tube" else "Bus" + (t.via.firstOrNull()?.let { " $it" } ?: "")
-            val note = buildString {
-                append("${Dates.clock(t.startAt)} to ${Dates.clock(t.endAt)}. ${p.note}.")
-                if (t.kind == TripKind.RAIL && t.via.isNotEmpty()) append(" Likely ${t.via.joinToString(", ")}.")
-            }
+            val note = noteFor(p)
             val row = TransactionEntity(
                 amountMinor = p.pence,
                 currency = "GBP",
