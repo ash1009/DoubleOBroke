@@ -82,10 +82,10 @@ object TripPlanner {
     suspend fun plan(legs: List<Leg>, lookup: StopLookup, points: List<Fix> = emptyList()): List<Trip> {
         // Train rides close together are one trip before anything else: a train stopping at a station,
         // or changing lines, often breaks the ride into pieces, some of them ending between stations.
-        val chained = chain(legs)
+        val groups = chainGroups(legs)
         val pts = TripFinder.clean(points)
-        val found = chained.mapIndexedNotNull { i, leg ->
-            classify(leg, lookup, pts, until = chained.getOrNull(i + 1)?.from?.at ?: Long.MAX_VALUE)
+        val found = groups.flatMapIndexed { i, group ->
+            classifyGroup(group, lookup, pts, until = groups.getOrNull(i + 1)?.first()?.from?.at ?: Long.MAX_VALUE)
         }
 
         // Join trains with only a short walk between them at a station: that's changing trains, one fare.
@@ -168,26 +168,49 @@ object TripPlanner {
     }
 
     /** Joins train rides that follow each other closely into one, unless the next one heads back to where it began. */
-    internal fun chain(legs: List<Leg>): List<Leg> {
-        val out = ArrayList<Leg>()
+    internal fun chain(legs: List<Leg>): List<Leg> = chainGroups(legs).map { merge(it) }
+
+    /** The rides [chain] joins, kept as their pieces, so a joined ride that doesn't work out can be split again. */
+    internal fun chainGroups(legs: List<Leg>): List<List<Leg>> {
+        val out = ArrayList<MutableList<Leg>>()
         for (leg in legs) {
-            val last = out.lastOrNull()
-            if (last != null && railLike(last) && railLike(leg)) {
-                val gap = leg.from.at - last.to.at
-                val walked = TripFinder.metres(last.to, leg.from)
-                val close = gap in 0..CHANGE_MS || (gap in 0..CHANGE_LONG_MS && walked <= CHANGE_M)
-                val headingBack = TripFinder.metres(leg.to, last.from) < RETURN_M
-                if (close && !headingBack) {
-                    out[out.lastIndex] = Leg(
-                        last.from, leg.to, last.underground || leg.underground,
-                        maxOf(last.maxSpeed, leg.maxSpeed), last.distance + leg.distance,
-                    )
-                    continue
+            val group = out.lastOrNull()
+            if (group != null) {
+                val last = merge(group)
+                if (railLike(last) && railLike(leg)) {
+                    val gap = leg.from.at - last.to.at
+                    val walked = TripFinder.metres(last.to, leg.from)
+                    val close = gap in 0..CHANGE_MS || (gap in 0..CHANGE_LONG_MS && walked <= CHANGE_M)
+                    val headingBack = TripFinder.metres(leg.to, last.from) < RETURN_M
+                    if (close && !headingBack) {
+                        group += leg
+                        continue
+                    }
                 }
             }
-            out += leg
+            out += mutableListOf(leg)
         }
         return out
+    }
+
+    private fun merge(group: List<Leg>): Leg = group.reduce { a, b ->
+        Leg(a.from, b.to, a.underground || b.underground, maxOf(a.maxSpeed, b.maxSpeed), a.distance + b.distance)
+    }
+
+    /**
+     * What a group of joined rides was. Usually one train ride. When the joined ride doesn't end at a
+     * station, the train may have ended earlier, with something slower after it that only looked like
+     * a train (a fast bus from the station, say): then the train part ends at the last station it
+     * reached, and the rest is looked at on its own.
+     */
+    private suspend fun classifyGroup(group: List<Leg>, lookup: StopLookup, pts: List<Fix>, until: Long): List<Found> {
+        classify(merge(group), lookup, pts, until)?.let { return listOf(it) }
+        if (group.size == 1) return emptyList()
+        for (k in group.size - 1 downTo 1) {
+            val train = classify(merge(group.subList(0, k)), lookup, pts, until = group[k].from.at) as? Found.Train ?: continue
+            return listOf(train) + classifyGroup(group.subList(k, group.size), lookup, pts, until)
+        }
+        return emptyList()
     }
 
     private fun isChange(a: Found.Train, b: Found.Train): Boolean {
