@@ -386,6 +386,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         prefs.setAgentOrder(order)
     }
 
+    /** The features on More, in the order you chose. */
+    val moreOrder: StateFlow<List<String>> = prefs.moreOrder
+
+    /** Moves a feature on More up (-1) or down (+1). */
+    fun moveMore(key: String, by: Int) {
+        val order = prefs.moreOrder.value.toMutableList()
+        val from = order.indexOf(key)
+        val to = from + by
+        if (from < 0 || to !in order.indices) return
+        order.removeAt(from)
+        order.add(to, key)
+        prefs.setMoreOrder(order)
+    }
+
     /** The Goals sheet, opened from the top bar on Insights or from a card. */
     private val _editingGoals = MutableStateFlow(false)
     val editingGoals: StateFlow<Boolean> = _editingGoals

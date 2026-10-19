@@ -244,6 +244,21 @@ class Prefs(context: Context) {
         return (saved.filter { it in AGENTS } + AGENTS).distinct()
     }
 
+    private val _moreOrder = MutableStateFlow(readMoreOrder())
+    /** The features on More, in the order you chose. Keys: [MORE]. */
+    val moreOrder: StateFlow<List<String>> = _moreOrder
+
+    fun setMoreOrder(order: List<String>) {
+        val clean = (order.filter { it in MORE } + MORE).distinct()
+        sp.edit().putString(KEY_MORE_ORDER, clean.joinToString(",")).apply()
+        _moreOrder.value = clean
+    }
+
+    private fun readMoreOrder(): List<String> {
+        val saved = sp.getString(KEY_MORE_ORDER, null)?.split(',')?.map { it.trim() }.orEmpty()
+        return (saved.filter { it in MORE } + MORE).distinct()
+    }
+
     /** The last day the nightly trip check finished, as yyyy-MM-dd. */
     var lastTravelDay: String
         get() = sp.getString(KEY_LAST_TRAVEL_DAY, "") ?: ""
@@ -362,10 +377,14 @@ class Prefs(context: Context) {
         private const val KEY_OYSTER_BALANCE = "oyster_balance"
         private const val KEY_BALANCE_AT = "balance_at"
         private const val KEY_AGENT_ORDER = "agent_order"
+        private const val KEY_MORE_ORDER = "more_order"
         private const val KEY_IMPORTANT_SENDERS = "mail_important_senders"
 
         /** Every agent, in the order you chose to start with: email, money, travel, passwords. */
         val AGENTS = listOf("email", "money", "travel", "limits")
+
+        /** What sits under More; new ones go at the end until you move them. */
+        val MORE = listOf("limits", "passwords", "notes", "news")
         private const val KEY_LAST_TRAVEL_DAY = "last_travel_day"
         private const val KEY_HIDDEN_REGULARS = "hidden_regulars"
         private const val KEY_GEMINI = "gemini_key"

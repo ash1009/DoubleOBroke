@@ -154,6 +154,7 @@ class ShellLinks(
 @Composable
 fun MainShell(app: AppViewModel, target: String?, onTargetHandled: () -> Unit, links: ShellLinks) {
     val order by app.agentOrder.collectAsStateWithLifecycle()
+    val moreOrder by app.moreOrder.collectAsStateWithLifecycle()
     val pages = remember(order) { shellPages(order) }
     val latestPages by rememberUpdatedState(pages)
     val pager = rememberPagerState { pages.size }
@@ -346,7 +347,7 @@ fun MainShell(app: AppViewModel, target: String?, onTargetHandled: () -> Unit, l
                         else -> MoneyInScreen(app)
                     }
                     Section.TRAVEL -> TravelPage(page.inner, travel, list, onOpenPayments = { go(Section.MONEY, 1) }, onOpenSetup = { go(Section.TRAVEL, 1) })
-                    Section.MORE -> MorePage(limits, vault, list, onLimits = { links.limits(0) }, onPasswords = links.passwords, onNews = links.news, onNotes = links.notes)
+                    Section.MORE -> MorePage(limits, vault, list, onLimits = { links.limits(0) }, onPasswords = links.passwords, onNews = links.news, onNotes = links.notes, order = moreOrder)
                 }
             }
         }

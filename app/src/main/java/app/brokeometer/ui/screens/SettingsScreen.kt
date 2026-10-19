@@ -116,6 +116,7 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, onOpenLog: () -> Unit, 
             }
 
             AgentOrder(vm)
+            MoreOrder(vm)
 
             SectionTitle("Bank alerts")
             Row(
@@ -705,7 +706,7 @@ private fun AgentOrder(vm: AppViewModel) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     SectionTitle("Order of agents")
     Text(
-        "Most important first. Sets the bottom bar, the order you swipe through, and the cards on Home. App limits and Passwords are under More.",
+        "Most important first. Sets the bottom bar, the order you swipe through, and the cards on Home. The rest are under More, in the order below.",
         style = MaterialTheme.typography.bodyMedium,
         color = muted,
         modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
@@ -725,6 +726,37 @@ private fun AgentOrder(vm: AppViewModel) {
             }
         }
     }
+}
+
+/** The features on More in the order you chose, with buttons to move each up or down. */
+@Composable
+private fun MoreOrder(vm: AppViewModel) {
+    val order by vm.moreOrder.collectAsStateWithLifecycle()
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    SectionTitle("Order on More")
+    order.forEachIndexed { i, key ->
+        Row(
+            Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 2.dp, bottom = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("${i + 1}", style = MaterialTheme.typography.titleMedium, color = muted, modifier = Modifier.width(28.dp))
+            Text(moreName(key), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            androidx.compose.material3.IconButton(onClick = { vm.moveMore(key, -1) }, enabled = i > 0) {
+                Icon(androidx.compose.material.icons.Icons.Rounded.KeyboardArrowUp, contentDescription = "Move ${moreName(key)} up")
+            }
+            androidx.compose.material3.IconButton(onClick = { vm.moveMore(key, 1) }, enabled = i < order.size - 1) {
+                Icon(androidx.compose.material.icons.Icons.Rounded.KeyboardArrowDown, contentDescription = "Move ${moreName(key)} down")
+            }
+        }
+    }
+}
+
+internal fun moreName(key: String): String = when (key) {
+    "limits" -> "App limits"
+    "passwords" -> "Passwords"
+    "notes" -> "Notes"
+    "news" -> "News"
+    else -> key
 }
 
 internal fun agentName(key: String): String = when (key) {

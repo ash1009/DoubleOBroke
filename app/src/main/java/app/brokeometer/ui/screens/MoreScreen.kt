@@ -67,6 +67,8 @@ internal fun MorePage(
     onPasswords: () -> Unit,
     onNews: () -> Unit = {},
     onNotes: () -> Unit = {},
+    /** The features in the order you chose (Settings, Order on More). */
+    order: List<String> = app.brokeometer.data.Prefs.MORE,
 ) {
     val list by limits.limits.collectAsStateWithLifecycle()
     val on by limits.on.collectAsStateWithLifecycle()
@@ -78,40 +80,44 @@ internal fun MorePage(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        item("limits") {
-            val line = when {
-                list.isEmpty() -> "Daily limits for the apps that eat your time"
-                !on -> "Off"
-                time?.allowed == false -> "Needs Usage access"
-                else -> {
-                    val busiest = list.maxByOrNull { (time?.perApp?.get(it.pkg) ?: 0L).toDouble() / (it.minutes.coerceAtLeast(1)) }!!
-                    "${busiest.label}: ${LimitRules.hm(time?.perApp?.get(busiest.pkg) ?: 0L)} of ${LimitRules.hmMinutes(busiest.minutes)} today"
+        order.forEach { key ->
+            when (key) {
+                "limits" -> item("limits") {
+                    val line = when {
+                        list.isEmpty() -> "Daily limits for the apps that eat your time"
+                        !on -> "Off"
+                        time?.allowed == false -> "Needs Usage access"
+                        else -> {
+                            val busiest = list.maxByOrNull { (time?.perApp?.get(it.pkg) ?: 0L).toDouble() / (it.minutes.coerceAtLeast(1)) }!!
+                            "${busiest.label}: ${LimitRules.hm(time?.perApp?.get(busiest.pkg) ?: 0L)} of ${LimitRules.hmMinutes(busiest.minutes)} today"
+                        }
+                    }
+                    MoreRow(Icons.Rounded.HourglassBottom, limitsTint(), "App limits", line, onLimits)
+                }
+                "passwords" -> item("passwords") {
+                    val line = when (vaultState) {
+                        is VaultState.None -> "Not set up yet"
+                        is VaultState.Locked -> "Locked"
+                        is VaultState.Open -> "Open"
+                    }
+                    MoreRow(Icons.Rounded.Key, LocalBrand.current.action, "Passwords", line, onPasswords)
+                }
+                "notes" -> item("notes") {
+                    MoreRow(Icons.Rounded.Lightbulb, LocalBrand.current.action, "Notes", "Notes and lists, like Keep", onNotes)
+                }
+                "news" -> item("news") {
+                    val news = (androidx.compose.ui.platform.LocalContext.current.applicationContext as app.brokeometer.BrokeApp).container.news
+                    val topics by news.topics.collectAsStateWithLifecycle()
+                    val newsOn by news.on.collectAsStateWithLifecycle()
+                    val time by news.time.collectAsStateWithLifecycle()
+                    val line = when {
+                        topics.isEmpty() -> "A daily briefing on the topics you follow"
+                        newsOn -> "Every day at ${app.brokeometer.news.NewsRules.clock(time)}"
+                        else -> "Off"
+                    }
+                    MoreRow(Icons.AutoMirrored.Rounded.Article, LocalBrand.current.action, "News", line, onNews)
                 }
             }
-            MoreRow(Icons.Rounded.HourglassBottom, limitsTint(), "App limits", line, onLimits)
-        }
-        item("passwords") {
-            val line = when (vaultState) {
-                is VaultState.None -> "Not set up yet"
-                is VaultState.Locked -> "Locked"
-                is VaultState.Open -> "Open"
-            }
-            MoreRow(Icons.Rounded.Key, LocalBrand.current.action, "Passwords", line, onPasswords)
-        }
-        item("notes") {
-            MoreRow(Icons.Rounded.Lightbulb, LocalBrand.current.action, "Notes", "Notes and lists, like Keep", onNotes)
-        }
-        item("news") {
-            val news = (androidx.compose.ui.platform.LocalContext.current.applicationContext as app.brokeometer.BrokeApp).container.news
-            val topics by news.topics.collectAsStateWithLifecycle()
-            val newsOn by news.on.collectAsStateWithLifecycle()
-            val time by news.time.collectAsStateWithLifecycle()
-            val line = when {
-                topics.isEmpty() -> "A daily briefing on the topics you follow"
-                newsOn -> "Every day at ${app.brokeometer.news.NewsRules.clock(time)}"
-                else -> "Off"
-            }
-            MoreRow(Icons.AutoMirrored.Rounded.Article, LocalBrand.current.action, "News", line, onNews)
         }
     }
 }
