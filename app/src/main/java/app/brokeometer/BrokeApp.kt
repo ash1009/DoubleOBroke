@@ -27,6 +27,7 @@ import app.brokeometer.mail.MailReader
 import app.brokeometer.mail.StarredMail
 import app.brokeometer.news.NewsAgent
 import app.brokeometer.news.NewsWorker
+import app.brokeometer.notes.NotesDatabase
 import app.brokeometer.data.FxUpdater
 import app.brokeometer.data.GeminiClient
 import app.brokeometer.data.Prefs
@@ -89,6 +90,7 @@ class AppContainer(app: BrokeApp) {
     val mailReader = MailReader(mailDatabase.dao(), prefs, mail)
     val starredMail = StarredMail(mailDatabase.dao(), prefs, mail)
     val news = NewsAgent(app, claude)
+    val notesDatabase: NotesDatabase = NotesDatabase.create(app)
     val travelDatabase: TravelDatabase = TravelDatabase.create(app)
     val travel = TravelAgent(app, travelDatabase.dao(), repository, prefs).also { capture.travel = it }
     val limits = LimitStore(app)

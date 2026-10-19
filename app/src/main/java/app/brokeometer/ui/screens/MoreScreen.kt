@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.HourglassBottom
 import androidx.compose.material.icons.rounded.Key
+import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.automirrored.rounded.Article
 import androidx.compose.material3.Icon
@@ -65,6 +66,7 @@ internal fun MorePage(
     onLimits: () -> Unit,
     onPasswords: () -> Unit,
     onNews: () -> Unit = {},
+    onNotes: () -> Unit = {},
 ) {
     val list by limits.limits.collectAsStateWithLifecycle()
     val on by limits.on.collectAsStateWithLifecycle()
@@ -95,6 +97,9 @@ internal fun MorePage(
                 is VaultState.Open -> "Open"
             }
             MoreRow(Icons.Rounded.Key, LocalBrand.current.action, "Passwords", line, onPasswords)
+        }
+        item("notes") {
+            MoreRow(Icons.Rounded.Lightbulb, LocalBrand.current.action, "Notes", "Notes and lists, like Keep", onNotes)
         }
         item("news") {
             val news = (androidx.compose.ui.platform.LocalContext.current.applicationContext as app.brokeometer.BrokeApp).container.news

@@ -22,6 +22,8 @@ data class BackupData(
     val vault: String? = null,
     /** Money in and transfers. */
     val moves: List<BackupMove> = emptyList(),
+    /** Notes, as a JSON list ([app.brokeometer.notes.NotesBackup]), or null. */
+    val notes: String? = null,
 )
 
 /**
@@ -89,6 +91,7 @@ object BackupCodec {
         })
         root.putOpt("avatar", data.avatar)
         root.putOpt("vault", data.vault)
+        data.notes?.let { root.put("notes", JSONArray(it)) }
         return root.toString()
     }
 
@@ -247,6 +250,7 @@ object BackupCodec {
                 avatar = root.stringOrNull("avatar"),
                 vault = root.stringOrNull("vault"),
                 moves = moves,
+                notes = root.optJSONArray("notes")?.toString(),
             )
         } catch (e: JSONException) {
             throw ImportFormatException("This backup is damaged and could not be read.")

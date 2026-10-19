@@ -88,6 +88,17 @@ class BackupTest {
     }
 
     @Test
+    fun notesTravelWithTheBackup() {
+        val notes = listOf(
+            app.brokeometer.notes.NoteEntity(title = "Shop", items = "[x] milk\n[ ] bread", checklist = true, color = "GREEN", pinned = true, createdAt = 10, updatedAt = 20),
+            app.brokeometer.notes.NoteEntity(title = "Trip", body = "# Pack\n**passport**", background = "DOTS", createdAt = 30, updatedAt = 40, keepKey = "keep|1|Trip"),
+        )
+        val withNotes = backup.copy(notes = app.brokeometer.notes.NotesBackup.write(notes))
+        val back = BackupCodec.read(BackupCodec.write(withNotes))
+        assertEquals(notes, app.brokeometer.notes.NotesBackup.read(back.notes!!))
+    }
+
+    @Test
     fun emptyGoalsAndNoPictureSurvive() {
         val plain = backup.copy(settings = BackupSettings(), avatar = null)
         assertEquals(plain, BackupCodec.read(BackupCodec.write(plain)))

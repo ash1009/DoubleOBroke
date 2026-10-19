@@ -337,6 +337,7 @@ private fun ImportDialog(state: ImportState, onConfirm: () -> Unit, onDismiss: (
                         if (r.categories > 0) add(plural(r.categories, "category", "categories"))
                         if (r.goals) add("your goals")
                         if (r.vault) add("your passwords (open them with your master password)")
+                        if (r.notes > 0) add(plural(r.notes, "note"))
                     }.joinToString(", ") + "."
                 )
             },

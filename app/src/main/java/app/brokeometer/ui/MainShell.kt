@@ -143,6 +143,7 @@ class ShellLinks(
     val passwords: () -> Unit,
     val limits: (Int) -> Unit,
     val news: () -> Unit = {},
+    val notes: () -> Unit = {},
 )
 
 /**
@@ -345,7 +346,7 @@ fun MainShell(app: AppViewModel, target: String?, onTargetHandled: () -> Unit, l
                         else -> MoneyInScreen(app)
                     }
                     Section.TRAVEL -> TravelPage(page.inner, travel, list, onOpenPayments = { go(Section.MONEY, 1) }, onOpenSetup = { go(Section.TRAVEL, 1) })
-                    Section.MORE -> MorePage(limits, vault, list, onLimits = { links.limits(0) }, onPasswords = links.passwords, onNews = links.news)
+                    Section.MORE -> MorePage(limits, vault, list, onLimits = { links.limits(0) }, onPasswords = links.passwords, onNews = links.news, onNotes = links.notes)
                 }
             }
         }

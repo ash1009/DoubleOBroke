@@ -22,7 +22,7 @@ import java.time.LocalDate
 import java.util.concurrent.TimeUnit
 
 /** What a restore added, for the message afterwards. */
-data class RestoreResult(val added: Int, val trips: Int, val categories: Int, val goals: Boolean, val vault: Boolean = false)
+data class RestoreResult(val added: Int, val trips: Int, val categories: Int, val goals: Boolean, val vault: Boolean = false, val notes: Int = 0)
 
 /**
  * Backups to a file: one now (anywhere, Google Drive included) or every week to a folder on the phone.
@@ -35,6 +35,10 @@ class BackupManager(
     private val vault: app.brokeometer.vault.VaultManager,
 ) {
     private val lock = Mutex()
+
+    /** Notes live in their own database, made after this. */
+    private fun notesDao() = (context.applicationContext as app.brokeometer.BrokeApp).container.notesDatabase.dao()
+
     private val avatarFile: File get() = File(context.filesDir, AVATAR_FILE)
 
     suspend fun backupText(): String = withContext(Dispatchers.IO) {
@@ -46,7 +50,8 @@ class BackupManager(
         )
         val avatar = avatarFile.takeIf { it.exists() && it.length() in 1..MAX_AVATAR_BYTES }
             ?.let { Base64.encodeToString(it.readBytes(), Base64.NO_WRAP) }
-        BackupCodec.write(repository.backupData(settings, avatar, BuildConfig.VERSION_NAME).copy(vault = vault.backupText()))
+        val notes = app.brokeometer.notes.NotesBackup.write(notesDao().all())
+        BackupCodec.write(repository.backupData(settings, avatar, BuildConfig.VERSION_NAME).copy(vault = vault.backupText(), notes = notes))
     }
 
     /** Saves a backup to a file the owner picked. */
@@ -93,7 +98,8 @@ class BackupManager(
             }.onSuccess { prefs.bumpAvatar() }
         }
         val vaultBack = plan.restoresVault && backup.vault?.let { runCatching { vault.restore(it) }.getOrDefault(false) } == true
-        return RestoreResult(added, plan.away.size, plan.newCategories.size, plan.restoresGoals, vaultBack)
+        val notes = backup.notes?.let { runCatching { app.brokeometer.notes.NotesBackup.restore(notesDao(), it) }.getOrDefault(0) } ?: 0
+        return RestoreResult(added, plan.away.size, plan.newCategories.size, plan.restoresGoals, vaultBack, notes)
     }
 
     // Weekly backup

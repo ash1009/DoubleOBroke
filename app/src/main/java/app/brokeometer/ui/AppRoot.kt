@@ -59,6 +59,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -67,6 +68,8 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
 import app.brokeometer.ui.screens.NewsScreen
+import app.brokeometer.ui.screens.NoteEditorScreen
+import app.brokeometer.ui.screens.NotesScreen
 import app.brokeometer.ui.screens.ComposeScreen
 import app.brokeometer.ui.screens.MessageScreen
 import app.brokeometer.BuildConfig
@@ -100,8 +103,9 @@ object Routes {
     const val LIMITS = "limits"
     const val MONEY_IN = "money/in"
     const val NEWS = "news"
+    const val NOTES = "notes"
 
-    val all = setOf(HOME, INSIGHTS, RECAP, PENDING, MONTHS, CATEGORIES, SETTINGS, ACCOUNT, LOG, EMAIL, PASSWORDS, TRAVEL, MONEY, EMAIL_SETUP, MORE, LIMITS, MONEY_IN, NEWS)
+    val all = setOf(HOME, INSIGHTS, RECAP, PENDING, MONTHS, CATEGORIES, SETTINGS, ACCOUNT, LOG, EMAIL, PASSWORDS, TRAVEL, MONEY, EMAIL_SETUP, MORE, LIMITS, MONEY_IN, NEWS, NOTES)
 
     /** Pages of the main screen (Home and the agents), as opposed to pages of their own. */
     val main = setOf(HOME, INSIGHTS, PENDING, MONTHS, CATEGORIES, EMAIL, TRAVEL, MONEY, MORE, MONEY_IN)
@@ -283,6 +287,7 @@ fun AppRoot(vm: AppViewModel, requestedRoute: String?, onRouteHandled: () -> Uni
                         },
                         passwords = { nav.goTo(Routes.PASSWORDS) },
                         news = { nav.goTo(Routes.NEWS) },
+                        notes = { nav.goTo(Routes.NOTES) },
                         limits = { page -> nav.navigate("${Routes.LIMITS}?page=$page") { launchSingleTop = true } },
                     ),
                 )
@@ -301,6 +306,30 @@ fun AppRoot(vm: AppViewModel, requestedRoute: String?, onRouteHandled: () -> Uni
             composable(Routes.EMAIL_SETUP) { EmailSetupScreen(onBack = { nav.popBackStack() }) }
             composable(Routes.PASSWORDS) { PasswordsPage(onBack = { nav.popBackStack() }) }
             composable(Routes.NEWS) { NewsScreen(onBack = { nav.popBackStack() }) }
+            composable(Routes.NOTES) {
+                NotesScreen(
+                    onBack = { nav.popBackStack() },
+                    onOpen = { id -> nav.navigate("notes/edit/$id") },
+                    onNew = { list -> nav.navigate("notes/edit/-1?list=$list") },
+                )
+            }
+            composable(
+                "notes/edit/{id}?list={list}",
+                arguments = listOf(
+                    navArgument("id") { type = NavType.LongType },
+                    navArgument("list") { type = NavType.BoolType; defaultValue = false },
+                ),
+            ) { entry ->
+                // The same notes as the Notes page, so a note deleted here can be undone there.
+                val parent = remember(entry) { runCatching { nav.getBackStackEntry(Routes.NOTES) }.getOrNull() }
+                val notesVm: NotesViewModel = if (parent != null) viewModel(parent) else viewModel()
+                NoteEditorScreen(
+                    id = entry.arguments?.getLong("id") ?: -1L,
+                    newChecklist = entry.arguments?.getBoolean("list") ?: false,
+                    onBack = { nav.popBackStack() },
+                    vm = notesVm,
+                )
+            }
             composable(
                 "${Routes.LIMITS}?page={page}",
                 arguments = listOf(navArgument("page") { type = NavType.IntType; defaultValue = 0 }),
