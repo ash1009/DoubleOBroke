@@ -320,7 +320,9 @@ fun NotesScreen(onBack: () -> Unit, onOpen: (Long) -> Unit, onNew: (checklist: B
             confirmButton = {
                 TextButton(onClick = {
                     askImport = false
-                    runCatching { pick.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) }
+                    // Any file: phones and Drive label .zip files in different ways, and a wrong label made it greyed out.
+                    // The file itself is checked when it's read.
+                    runCatching { pick.launch(arrayOf("*/*")) }
                 }) { Text("Pick the .zip", color = brand.action) }
             },
             dismissButton = { TextButton(onClick = { askImport = false }) { Text("Cancel") } },
