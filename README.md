@@ -51,7 +51,10 @@ Each part of the app is an agent that does a job in the background and asks you 
 - Pick up to three features for the bottom bar (Home and More are always there); the rest live under More.
 
 ### Notes
-- Notes and lists like Google Keep: checklists, colours, backgrounds, pinning, **bold**, *italics* and headings, and search.
+- Notes and lists like Google Keep: checklists, colours, patterns or your own photo as a background, pinning, **bold**, *italics*, three sizes of heading, and search.
+- Hold a note for its menu (pin, colour, copy, delete), or hold and drag it to a new place.
+- Voice notes: the words go in the note and the recording is kept with it.
+- Deleted notes wait in a Bin for 7 days.
 - Bring notes in from Google Keep with a Google Takeout export. Notes are in the app's backup too.
 
 ### News
@@ -136,7 +139,7 @@ Release builds are signed with a key from the environment when one is given (`SI
 
 ## Tests
 
-179 unit tests cover the parts with the most logic: bank message parsing, money in and transfer matching, category guessing, CSV import and backups, trip finding and fares, the day timeline, screen time maths, limit rules and blocked hours, email prompts and actions, and the vault's encryption and import.
+181 unit tests cover the parts with the most logic: bank message parsing, money in and transfer matching, category guessing, CSV import and backups, trip finding and fares, the day timeline, screen time maths, limit rules and blocked hours, email prompts and actions, and the vault's encryption and import.
 
 During development, the app also ran on an Android emulator in CI, which tapped through it with made-up data and saved the screenshots above.
 
