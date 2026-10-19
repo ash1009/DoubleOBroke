@@ -25,6 +25,8 @@ import app.brokeometer.mail.MailDatabase
 import app.brokeometer.mail.MailNotifier
 import app.brokeometer.mail.MailReader
 import app.brokeometer.mail.StarredMail
+import app.brokeometer.news.NewsAgent
+import app.brokeometer.news.NewsWorker
 import app.brokeometer.data.FxUpdater
 import app.brokeometer.data.GeminiClient
 import app.brokeometer.data.Prefs
@@ -54,7 +56,7 @@ class BrokeApp : Application() {
         container.nudges.start(scope)
         if (container.prefs.backupFolder.value != null) BackupManager.schedule(this)
         if (container.prefs.mailAgentOn.value) InboxAgent.schedule(this)
-        if (container.news.on.value) app.brokeometer.news.NewsWorker.schedule(this)
+        if (container.news.on.value) NewsWorker.schedule(this)
         TravelTracker.ensureChannel(this)
         if (container.prefs.trackTrips.value) {
             TravelTracker.sync(this)
@@ -86,7 +88,7 @@ class AppContainer(app: BrokeApp) {
     val inboxAgent = InboxAgent(app, mailDatabase.dao(), prefs, mail, mailNotifier, app.scope, repository)
     val mailReader = MailReader(mailDatabase.dao(), prefs, mail)
     val starredMail = StarredMail(mailDatabase.dao(), prefs, mail)
-    val news = app.brokeometer.news.NewsAgent(app, claude)
+    val news = NewsAgent(app, claude)
     val travelDatabase: TravelDatabase = TravelDatabase.create(app)
     val travel = TravelAgent(app, travelDatabase.dao(), repository, prefs).also { capture.travel = it }
     val limits = LimitStore(app)

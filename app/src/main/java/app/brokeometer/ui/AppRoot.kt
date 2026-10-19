@@ -66,6 +66,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
+import app.brokeometer.ui.screens.NewsScreen
 import app.brokeometer.ui.screens.ComposeScreen
 import app.brokeometer.ui.screens.MessageScreen
 import app.brokeometer.BuildConfig
@@ -299,7 +300,7 @@ fun AppRoot(vm: AppViewModel, requestedRoute: String?, onRouteHandled: () -> Uni
             composable(Routes.LOG) { LogScreen(vm, onBack = { nav.popBackStack() }) }
             composable(Routes.EMAIL_SETUP) { EmailSetupScreen(onBack = { nav.popBackStack() }) }
             composable(Routes.PASSWORDS) { PasswordsPage(onBack = { nav.popBackStack() }) }
-            composable(Routes.NEWS) { app.brokeometer.ui.screens.NewsScreen(onBack = { nav.popBackStack() }) }
+            composable(Routes.NEWS) { NewsScreen(onBack = { nav.popBackStack() }) }
             composable(
                 "${Routes.LIMITS}?page={page}",
                 arguments = listOf(navArgument("page") { type = NavType.IntType; defaultValue = 0 }),
