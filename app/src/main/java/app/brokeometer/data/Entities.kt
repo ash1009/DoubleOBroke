@@ -142,6 +142,8 @@ object MoveKind {
     const val OTHER = "OTHER"
     /** Money in from someone else that you haven't said anything about yet. */
     const val UNSORTED = "UNSORTED"
+    /** Money put on the Oyster card (direction OUT): it moves from the bank to Oyster, and isn't spending. */
+    const val TOPUP = "TOPUP"
 }
 
 /**

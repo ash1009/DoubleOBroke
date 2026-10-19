@@ -245,6 +245,7 @@ fun PaymentsScreen(vm: AppViewModel) {
             onDismiss = { editing = null },
             onSave = { d: EntryDraft -> vm.saveEntry(open, d.amountMinor, d.label, d.date, d.subcategoryId, d.note) },
             onDelete = { vm.deleteEntry(open.id) },
+            onTopUp = { vm.oysterTopUp(open.id); Unit }.takeIf { open.source == TxSource.BANK && open.currency == "GBP" },
         )
     }
     if (adding) {

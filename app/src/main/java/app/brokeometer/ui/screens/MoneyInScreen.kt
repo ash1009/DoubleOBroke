@@ -41,7 +41,8 @@ import app.brokeometer.util.Dates
 import app.brokeometer.util.Money
 
 /**
- * Money that isn't spending: money in at HSBC and Starling, and transfers between your own accounts.
+ * Money that isn't spending: money in at HSBC and Starling, transfers between your own accounts, and
+ * Oyster top-ups.
  * A transfer seen at both banks is one row. Tap a row to say what it was.
  */
 @Composable
@@ -78,7 +79,22 @@ fun MoneyInScreen(vm: AppViewModel) {
     val open = asking
     if (open != null) {
         val brand = LocalBrand.current
-        if (open.direction == MoneyMoveEntity.OUT) {
+        if (open.kind == MoveKind.TOPUP) {
+            AlertDialog(
+                onDismissRequest = { asking = null },
+                title = { Text("Oyster top-up") },
+                text = {
+                    Text(
+                        "${Money.format(open.amountMinor, open.currency)} put on your Oyster card. It moves money from the bank " +
+                            "to Oyster, so it isn't spending: your trips count instead. If it was a payment, it goes back to payments waiting."
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { vm.notATransfer(open.id); asking = null }) { Text("It was a payment", color = brand.action) }
+                },
+                dismissButton = { TextButton(onClick = { asking = null }) { Text("Keep") } },
+            )
+        } else if (open.direction == MoneyMoveEntity.OUT) {
             AlertDialog(
                 onDismissRequest = { asking = null },
                 title = { Text("Moved to your own account") },
@@ -133,6 +149,10 @@ private fun MoveRow(
     val detail: String
     var waiting = false
     when {
+        move.kind == MoveKind.TOPUP -> {
+            title = "Oyster top-up"
+            detail = "From ${move.bank} to your Oyster card, $time"
+        }
         move.direction == MoneyMoveEntity.OUT -> {
             title = "To ${move.counterparty.ifBlank { "your account" }}"
             detail = "Moved to your own account from ${move.bank}, $time"

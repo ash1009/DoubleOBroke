@@ -27,6 +27,7 @@ Each part of the app is an agent that does a job in the background and asks you 
 - **Insights**: runway (how long your savings last), a daily allowance, categories against a usual month, no-spend days, regular payments and a year recap. Category caps send a nudge at 80% and when you go over.
 - **Money in** from HSBC and Starling is listed on its own and never counted as spending. Money moved between your own accounts is a transfer: the two banks' alerts are paired by their shared reference (or your name), in whichever order they arrive. An equal amount alone is never enough.
 - **Paid back:** money from a friend asks whether it pays you back for something. Pick the payment and it counts only your share everywhere (paid £60, £40 back: £20 spent).
+- **Effective balance**: type your bank and Oyster balances once and they keep up to date. Card payments and money in change the bank, trips come off Oyster (unless the card paid for them), and an Oyster top-up moves money from the bank to Oyster without counting as spending.
 - Other currencies are converted at that day's European Central Bank rate.
 
 ### Email
@@ -121,7 +122,7 @@ Release builds are signed with a key from the environment when one is given (`SI
 
 ## Tests
 
-149 unit tests cover the parts with the most logic: bank message parsing, money in and transfer matching, category guessing, CSV import and backups, trip finding and fares, the day timeline, screen time maths, limit rules and blocked hours, email prompts and actions, and the vault's encryption and import.
+154 unit tests cover the parts with the most logic: bank message parsing, money in and transfer matching, category guessing, CSV import and backups, trip finding and fares, the day timeline, screen time maths, limit rules and blocked hours, email prompts and actions, and the vault's encryption and import.
 
 During development, the app also ran on an Android emulator in CI, which tapped through it with made-up data and saved the screenshots above.
 

@@ -249,6 +249,26 @@ class Prefs(context: Context) {
         get() = sp.getString(KEY_LAST_TRAVEL_DAY, "") ?: ""
         set(value) = sp.edit().putString(KEY_LAST_TRAVEL_DAY, value).apply()
 
+    private val _balances = MutableStateFlow(readBalances())
+    /** The bank and Oyster balances as typed in, and when; null until they are. */
+    val balances: StateFlow<app.brokeometer.insights.BalanceStart?> = _balances
+
+    private fun readBalances(): app.brokeometer.insights.BalanceStart? {
+        val at = sp.getLong(KEY_BALANCE_AT, -1L).takeIf { it >= 0 } ?: return null
+        return app.brokeometer.insights.BalanceStart(sp.getLong(KEY_BANK_BALANCE, 0L), sp.getLong(KEY_OYSTER_BALANCE, 0L), at)
+    }
+
+    fun setBalances(value: app.brokeometer.insights.BalanceStart?) {
+        sp.edit().apply {
+            if (value == null) {
+                remove(KEY_BANK_BALANCE); remove(KEY_OYSTER_BALANCE); remove(KEY_BALANCE_AT)
+            } else {
+                putLong(KEY_BANK_BALANCE, value.bankMinor); putLong(KEY_OYSTER_BALANCE, value.oysterMinor); putLong(KEY_BALANCE_AT, value.at)
+            }
+        }.apply()
+        _balances.value = value
+    }
+
     private val _goals = MutableStateFlow(readGoals())
     val goals: StateFlow<Goals> = _goals
 
@@ -338,6 +358,9 @@ class Prefs(context: Context) {
         private const val KEY_SAVE_LOCATION = "save_location"
         private const val KEY_TRACK_TRIPS = "track_trips"
         private const val KEY_RAILCARD = "railcard"
+        private const val KEY_BANK_BALANCE = "bank_balance"
+        private const val KEY_OYSTER_BALANCE = "oyster_balance"
+        private const val KEY_BALANCE_AT = "balance_at"
         private const val KEY_AGENT_ORDER = "agent_order"
         private const val KEY_IMPORTANT_SENDERS = "mail_important_senders"
 

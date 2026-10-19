@@ -136,6 +136,10 @@ interface BrokeDao {
     @Query("DELETE FROM transactions WHERE source = 'TEST'")
     suspend fun deleteTestTransactions()
 
+    /** Every payment after [at], waiting or not, for the bank and Oyster balances. */
+    @Query("SELECT * FROM transactions WHERE occurredAt > :at AND source != 'TEST'")
+    fun observeSince(at: Long): Flow<List<TransactionEntity>>
+
     /** Every counted payment, newest first, for the Payments page. */
     @Query("SELECT * FROM transactions WHERE status = 'CONFIRMED' ORDER BY day DESC, occurredAt DESC, id DESC")
     fun observeHistory(): Flow<List<TransactionEntity>>

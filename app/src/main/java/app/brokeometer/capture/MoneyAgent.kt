@@ -91,7 +91,7 @@ class MoneyAgent(
         val fromSelf = MoneyText.namesOwner(money.descriptor, owner, learned)
         val moves = nearby(at)
         val outMove = moves.firstOrNull { m ->
-            m.direction == MoneyMoveEntity.OUT && m.pairId == null && TransferMatch.isPair(outSide(m), inn, owner, learned)
+            m.direction == MoneyMoveEntity.OUT && m.kind == MoveKind.TRANSFER && m.pairId == null && TransferMatch.isPair(outSide(m), inn, owner, learned)
         }
         // A payment that was really a transfer: only when the reference matches or it names you.
         val outPayment = if (outMove != null) null else dao.bankPaymentsBetween(at - TransferMatch.WINDOW_MS, at + TransferMatch.WINDOW_MS)
@@ -135,6 +135,54 @@ class MoneyAgent(
         }
     }
 
+    /** An Oyster top-up in a bank alert: money moved from the bank to Oyster, noted on Money in, not spending. */
+    suspend fun onTopUp(payment: ParsedPayment, bank: String, at: Long, sourceKey: String) = lock.withLock {
+        dao.insertMove(
+            MoneyMoveEntity(
+                direction = MoneyMoveEntity.OUT,
+                kind = MoveKind.TOPUP,
+                amountMinor = payment.amountMinor,
+                currency = payment.currency,
+                counterparty = "Oyster",
+                reference = "",
+                descriptor = payment.descriptor,
+                bank = bank,
+                account = payment.account,
+                occurredAt = at,
+                day = Dates.dayOf(at),
+                sourceKey = sourceKey,
+                createdAt = System.currentTimeMillis(),
+            )
+        )
+    }
+
+    /** You said this payment was an Oyster top-up: it moves to Money in as one, and isn't spending. */
+    suspend fun markTopUp(txId: Long): Boolean = lock.withLock {
+        val tx = dao.transaction(txId) ?: return@withLock false
+        db.withTransaction {
+            dao.insertMove(
+                MoneyMoveEntity(
+                    direction = MoneyMoveEntity.OUT,
+                    kind = MoveKind.TOPUP,
+                    amountMinor = tx.paidMinor ?: tx.amountMinor,
+                    currency = tx.currency,
+                    counterparty = "Oyster",
+                    reference = "",
+                    descriptor = tx.descriptor,
+                    bank = bankOf(tx),
+                    account = tx.account,
+                    occurredAt = tx.occurredAt,
+                    day = tx.day,
+                    sourceKey = "topup|${tx.sourceKey ?: tx.id}",
+                    createdAt = System.currentTimeMillis(),
+                )
+            )
+            repository.delete(tx.id)
+        }
+        notifier.cancel(tx.id)
+        true
+    }
+
     /** You said this money in came from one of your own accounts. */
     suspend fun markMine(id: Long) = lock.withLock {
         val move = dao.move(id) ?: return@withLock
@@ -143,7 +191,7 @@ class MoneyAgent(
         var updated = move.copy(kind = MoveKind.TRANSFER, paysBackId = null)
         if (move.direction == MoneyMoveEntity.IN && move.pairId == null) {
             val partner = nearby(move.occurredAt).firstOrNull { m ->
-                m.direction == MoneyMoveEntity.OUT && m.pairId == null && TransferMatch.sameMoney(outSide(m), inSide(move))
+                m.direction == MoneyMoveEntity.OUT && m.kind == MoveKind.TRANSFER && m.pairId == null && TransferMatch.sameMoney(outSide(m), inSide(move))
             }
             if (partner != null) {
                 dao.updateMove(partner.copy(pairId = move.id))
@@ -177,7 +225,7 @@ class MoneyAgent(
         notifier.cancelMoneyIn(id)
     }
 
-    /** A transfer out that was really a payment: it becomes a payment waiting for you again. */
+    /** A transfer out (or an Oyster top-up) that was really a payment: it becomes a payment waiting for you again. */
     suspend fun notATransfer(id: Long): TransactionEntity? = lock.withLock {
         val move = dao.move(id) ?: return@withLock null
         if (move.direction != MoneyMoveEntity.OUT) return@withLock null

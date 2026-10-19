@@ -133,6 +133,9 @@ internal fun MoneyThisMonthPage(
 
         insights?.let { data ->
             item(key = "words") { WordsCard(data, catalog, onClick = onOpenInsights) }
+        }
+        item(key = "balance") { BalanceCard(vm) }
+        insights?.let { data ->
             item(key = "cut-back") { CutBackCard(data, catalog, onClick = onOpenInsights) }
             item(key = "coming-up") { ComingUp(data, catalog) }
         }
@@ -183,6 +186,103 @@ private fun WordsCard(data: InsightsData, catalog: app.brokeometer.data.Catalog,
             }
         }
     }
+}
+
+/**
+ * Bank and Oyster together, typed in once and kept up to date from payments, money in, top-ups and
+ * trips. Tap to type them again.
+ */
+@Composable
+private fun BalanceCard(vm: AppViewModel) {
+    val balances by vm.balances.collectAsStateWithLifecycle()
+    var editing by remember { mutableStateOf(false) }
+    val brand = LocalBrand.current
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val b = balances
+    Surface(
+        onClick = { editing = true },
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 12.dp),
+    ) {
+        Column(Modifier.padding(horizontal = 18.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Effective balance", style = MaterialTheme.typography.titleLarge)
+            if (b == null) {
+                Text(
+                    "Type your bank and Oyster balances once. From then on they keep up to date from your payments, money in, top-ups and trips.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = muted,
+                )
+                Text("Add balances", style = MaterialTheme.typography.labelLarge, color = brand.action)
+            } else {
+                Text(
+                    Money.format(b.totalMinor),
+                    style = MaterialTheme.typography.headlineMedium.copy(fontFeatureSettings = TABULAR),
+                    color = if (b.totalMinor < 0) brand.broke else MaterialTheme.colorScheme.onSurface,
+                )
+                Text("Bank ${Money.format(b.bankMinor)} · Oyster ${Money.format(b.oysterMinor)}", style = MaterialTheme.typography.bodyMedium, color = muted)
+            }
+        }
+    }
+    if (editing) {
+        BalanceDialog(
+            bankMinor = b?.bankMinor,
+            oysterMinor = b?.oysterMinor,
+            onSave = { bank, oyster -> vm.setBalances(bank, oyster) },
+            onDismiss = { editing = false },
+        )
+    }
+}
+
+@Composable
+private fun BalanceDialog(bankMinor: Long?, oysterMinor: Long?, onSave: (Long, Long) -> Unit, onDismiss: () -> Unit) {
+    var bank by remember { mutableStateOf(bankMinor?.let { Money.plain(it) }.orEmpty()) }
+    var oyster by remember { mutableStateOf(oysterMinor?.let { Money.plain(it) }.orEmpty()) }
+    val bankValue = Money.parseToMinor(bank)
+    val oysterValue = Money.parseToMinor(oyster)
+    val brand = LocalBrand.current
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        title = { Text("Your balances now") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "As your banking apps and the TfL Oyster app show them now. The app keeps them up to date from here.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                MoneyField("Bank (HSBC and Starling together)", bank) { bank = it }
+                MoneyField("Oyster", oyster) { oyster = it }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = bankValue != null && oysterValue != null,
+                onClick = {
+                    if (bankValue != null && oysterValue != null) onSave(bankValue, oysterValue)
+                    onDismiss()
+                },
+            ) { Text("Save", color = brand.action) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun MoneyField(label: String, value: String, onChange: (String) -> Unit) {
+    androidx.compose.material3.OutlinedTextField(
+        value = value,
+        onValueChange = { text -> onChange(text.filter { it.isDigit() || it == '.' }.take(10)) },
+        label = { Text(label) },
+        prefix = { Text("£") },
+        singleLine = true,
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 /** The one or two categories most over their average this month: where there is room to save. */

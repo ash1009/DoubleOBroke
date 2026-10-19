@@ -81,8 +81,9 @@ class CaptureCoordinator(
             is ParseResult.Payment -> {
                 val t = travel
                 if (t != null && t.isOysterTopUp(result.payment.merchantKey, result.payment.merchantName)) {
-                    // Trips are counted one by one, so the top-up itself isn't spending.
-                    if (!replay) repository.log(packageName, title, text, "Oyster top-up: not counted, your trips count instead")
+                    // Trips are counted one by one, so the top-up itself isn't spending: it moves money to Oyster.
+                    money.onTopUp(result.payment, HsbcParser.BANK, postedAt, "$alertKey|$postedAt")
+                    if (!replay) repository.log(packageName, title, text, "Oyster top-up: noted on Money in, not counted, your trips count instead")
                     return false
                 }
                 if (money.onMoneyOut(result.payment, HsbcParser.BANK, postedAt, "$alertKey|$postedAt")) {

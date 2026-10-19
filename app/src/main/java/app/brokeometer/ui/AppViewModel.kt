@@ -85,6 +85,37 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun moneyMine(id: Long) = viewModelScope.launch { container.money.markMine(id) }
 
+    // Bank and Oyster balances
+
+    /** The balances as typed in, and when; null until they are. */
+    val balanceStart: StateFlow<app.brokeometer.insights.BalanceStart?> = prefs.balances
+
+    /** The bank and Oyster balances now, kept up to date from payments, money in, top-ups and trips. */
+    val balances: StateFlow<app.brokeometer.insights.Balances?> = prefs.balances.flatMapLatest { start ->
+        if (start == null) {
+            kotlinx.coroutines.flow.flowOf(null)
+        } else {
+            combine(dao.observeSince(start.at), dao.observeMoves()) { payments, moves ->
+                val ids = moves.map { it.id }.toSet()
+                app.brokeometer.insights.BalanceMath.now(
+                    start,
+                    payments.map { app.brokeometer.insights.BalancePayment(it.source, it.currency, it.paidMinor ?: it.amountMinor, it.occurredAt) },
+                    moves.map {
+                        app.brokeometer.insights.BalanceMove(it.direction, it.kind, it.currency, it.amountMinor, it.occurredAt, paired = it.pairId != null && it.pairId in ids)
+                    },
+                )
+            }
+        }
+    }.held(null)
+
+    /** Types in the balances as they are now; from here on the app keeps them up to date. */
+    fun setBalances(bankMinor: Long, oysterMinor: Long) {
+        prefs.setBalances(app.brokeometer.insights.BalanceStart(bankMinor, oysterMinor, System.currentTimeMillis()))
+    }
+
+    /** A payment that was money put on the Oyster card: it moves to Money in as a top-up. */
+    fun oysterTopUp(id: Long) = viewModelScope.launch { container.money.markTopUp(id) }
+
     fun moneyOther(id: Long) = viewModelScope.launch { container.money.markOther(id) }
 
     /** A transfer out that was really a payment: back to payments waiting. */
