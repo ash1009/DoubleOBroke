@@ -126,6 +126,11 @@ object MailActions {
     const val MARKED_UNREAD = "MARKED_UNREAD"
     /** Deleted by the owner: in the bin, which the email service empties after about 30 days. */
     const val DELETED = "DELETED"
+    /**
+     * Only on the Important page: a starred email the agent never handled. Never saved in the list;
+     * used to open it the same way as the others.
+     */
+    const val STARRED = "STARRED"
 
     private val unreadActions = setOf(NOTIFIED, KEPT, UNDECIDED, NOT_SPAM, MOVED_FROM_SPAM, MARKED_UNREAD)
     private val readActions = setOf(READ_ELSEWHERE, MARKED_READ)
@@ -184,6 +189,24 @@ object MailActions {
     fun inInbox(e: MailLogEntity): Boolean =
         e.fromAddress.isNotEmpty() && (e.folder == MailFolders.INBOX || e.action == NOT_SPAM || e.action == MOVED_FROM_SPAM || e.undone)
 }
+
+/**
+ * A starred email, or one Gmail marks important: the Important page. Copied from the mailbox now and
+ * then (and when starred or unstarred in the app), so the page shows straight away.
+ */
+@Entity(tableName = "mail_starred", indices = [Index(value = ["accountId", "messageId"], unique = true)])
+data class MailStarredEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val accountId: Long,
+    val messageId: String,
+    val fromName: String,
+    val fromAddress: String,
+    val subject: String,
+    val at: Long,
+    val seen: Boolean,
+    val starred: Boolean,
+    val important: Boolean,
+)
 
 /** The last email the agent looked at in each folder, so each email is handled once. */
 @Entity(tableName = "mail_cursors", primaryKeys = ["accountId", "folder"])
@@ -352,6 +375,33 @@ interface MailDao {
 
     @Query("DELETE FROM mail_cursors WHERE accountId = :accountId")
     suspend fun deleteCursorsOf(accountId: Long)
+
+    @Query("SELECT * FROM mail_starred ORDER BY at DESC")
+    fun observeStarred(): Flow<List<MailStarredEntity>>
+
+    @Query("SELECT * FROM mail_starred WHERE id = :id")
+    fun observeStarredEntry(id: Long): Flow<MailStarredEntity?>
+
+    @Query("SELECT * FROM mail_starred WHERE id = :id")
+    suspend fun starredEntry(id: Long): MailStarredEntity?
+
+    @Query("SELECT * FROM mail_starred WHERE accountId = :accountId")
+    suspend fun starredOf(accountId: Long): List<MailStarredEntity>
+
+    @Query("SELECT * FROM mail_starred WHERE accountId = :accountId AND messageId = :messageId")
+    suspend fun starredFor(accountId: Long, messageId: String): MailStarredEntity?
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertStarred(row: MailStarredEntity): Long
+
+    @Update
+    suspend fun updateStarred(row: MailStarredEntity)
+
+    @Query("DELETE FROM mail_starred WHERE id IN (:ids)")
+    suspend fun deleteStarred(ids: List<Long>)
+
+    @Query("DELETE FROM mail_starred WHERE accountId = :accountId")
+    suspend fun deleteStarredOf(accountId: Long)
 }
 
 @Database(
@@ -361,8 +411,9 @@ interface MailDao {
         MailSenderEntity::class,
         MailLogEntity::class,
         MailCursorEntity::class,
+        MailStarredEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class MailDatabase : RoomDatabase() {
@@ -394,9 +445,22 @@ abstract class MailDatabase : RoomDatabase() {
             }
         }
 
+        /** Version 4 keeps starred and important emails for the Important page. */
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `mail_starred` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`accountId` INTEGER NOT NULL, `messageId` TEXT NOT NULL, `fromName` TEXT NOT NULL, " +
+                        "`fromAddress` TEXT NOT NULL, `subject` TEXT NOT NULL, `at` INTEGER NOT NULL, `seen` INTEGER NOT NULL, " +
+                        "`starred` INTEGER NOT NULL, `important` INTEGER NOT NULL)"
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_mail_starred_accountId_messageId` ON `mail_starred` (`accountId`, `messageId`)")
+            }
+        }
+
         fun create(context: Context): MailDatabase =
             Room.databaseBuilder(context.applicationContext, MailDatabase::class.java, "mail.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build()
     }
 }

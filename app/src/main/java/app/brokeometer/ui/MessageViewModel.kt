@@ -12,20 +12,44 @@ import androidx.lifecycle.viewModelScope
 import app.brokeometer.BrokeApp
 import app.brokeometer.mail.FullEmail
 import app.brokeometer.mail.MailAccountEntity
+import app.brokeometer.mail.MailActions
+import app.brokeometer.mail.MailFolders
 import app.brokeometer.mail.MailLogEntity
+import app.brokeometer.mail.MailStarredEntity
 import app.brokeometer.mail.MailReader
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-/** The emails shown on Activity, in order, when one was opened: the ones you can swipe through. */
+/**
+ * The emails shown on Activity (or Important), in order, when one was opened: the ones you can swipe
+ * through. A starred email the agent never handled has the negative of its Important page row's id.
+ */
 object EmailBrowse {
     @Volatile var ids: List<Long> = emptyList()
 }
+
+/** A starred email the agent never handled, shaped like a list entry so it opens the same way. */
+fun MailStarredEntity.asLog(): MailLogEntity = MailLogEntity(
+    id = -id,
+    at = at,
+    accountId = accountId,
+    folder = MailFolders.INBOX,
+    uid = 0,
+    messageId = messageId,
+    fromName = fromName,
+    fromAddress = fromAddress,
+    subject = subject,
+    categoryId = null,
+    categoryName = "",
+    action = MailActions.STARRED,
+    summary = "",
+)
 
 /** Emails from the Activity list, opened in full, one page each. */
 class MessageViewModel(application: Application, state: SavedStateHandle) : AndroidViewModel(application) {
@@ -41,9 +65,14 @@ class MessageViewModel(application: Application, state: SavedStateHandle) : Andr
     val ids: List<Long> = state.get<LongArray>("ids")?.toList()
         ?: (EmailBrowse.ids.takeIf { id in it } ?: listOf(id)).also { state["ids"] = it.toLongArray() }
 
-    fun entry(id: Long): Flow<MailLogEntity?> = dao.observeLogEntry(id)
+    fun entry(id: Long): Flow<MailLogEntity?> {
+        if (id >= 0) return dao.observeLogEntry(id)
+        // Unstarring it here takes it off the page, but it stays open until you leave it.
+        var last: MailLogEntity? = null
+        return dao.observeStarredEntry(-id).map { r -> (r?.asLog() ?: last).also { last = it } }
+    }
 
-    suspend fun log(id: Long): MailLogEntity? = dao.log(id)
+    suspend fun log(id: Long): MailLogEntity? = if (id < 0) dao.starredEntry(-id)?.asLog() else dao.log(id)
 
     val accounts: StateFlow<List<MailAccountEntity>> =
         dao.observeAccounts().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -60,7 +89,7 @@ class MessageViewModel(application: Application, state: SavedStateHandle) : Andr
 
     private fun fetch(id: Long, into: MutableStateFlow<MailReader.Opened?>) = viewModelScope.launch {
         into.value = null
-        val log = dao.log(id)
+        val log = log(id)
         into.value = if (log == null) MailReader.Opened.Problem("This email isn't on the list any more.") else reader.open(log)
     }
 
@@ -75,7 +104,7 @@ class MessageViewModel(application: Application, state: SavedStateHandle) : Andr
 
     /** Fetches one attached file into the app's cache, to open with another app. Null if it couldn't. */
     suspend fun attachment(id: Long, index: Int): MailReader.Saved? {
-        val log = dao.log(id) ?: return null
+        val log = log(id) ?: return null
         return reader.attachment(log, index, java.io.File(getApplication<Application>().cacheDir, "attachments"))
     }
 }

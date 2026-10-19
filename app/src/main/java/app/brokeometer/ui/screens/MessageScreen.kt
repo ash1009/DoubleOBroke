@@ -33,6 +33,8 @@ import androidx.compose.material.icons.automirrored.rounded.Reply
 import androidx.compose.material.icons.outlined.Drafts
 import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.rounded.AttachFile
+import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.StarBorder
 import androidx.core.content.FileProvider
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.material3.CircularProgressIndicator
@@ -68,6 +70,7 @@ import app.brokeometer.mail.MailAccountEntity
 import app.brokeometer.mail.MailActions
 import app.brokeometer.mail.MailProviders
 import app.brokeometer.mail.MailReader
+import app.brokeometer.mail.StarredMail
 import app.brokeometer.ui.MailViewModel
 import app.brokeometer.ui.MessageViewModel
 import app.brokeometer.ui.components.QuietButton
@@ -139,8 +142,10 @@ fun MessageScreen(
                             Icon(Icons.Outlined.Email, contentDescription = "Mark unread", tint = muted)
                         }
                     }
-                    IconButton(onClick = { onReply(e.id) }) {
-                        Icon(Icons.AutoMirrored.Rounded.Reply, contentDescription = "Reply", tint = brand.action)
+                    if (e.id > 0) {
+                        IconButton(onClick = { onReply(e.id) }) {
+                            Icon(Icons.AutoMirrored.Rounded.Reply, contentDescription = "Reply", tint = brand.action)
+                        }
                     }
                 }
             }
@@ -168,6 +173,8 @@ private fun MessagePage(id: Long, page: MessageViewModel, vm: MailViewModel, onR
     val quietSenders by vm.quietSenders.collectAsStateWithLifecycle()
     val importantSenders by vm.importantSenders.collectAsStateWithLifecycle()
     val problem by vm.problem.collectAsStateWithLifecycle()
+    val starredRows by vm.starred.collectAsStateWithLifecycle()
+    val starring by vm.starring.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val brand = LocalBrand.current
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -239,6 +246,8 @@ private fun MessagePage(id: Long, page: MessageViewModel, vm: MailViewModel, onR
             }
             Spacer(Modifier.height(12.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                // A starred email the agent never handled can only be read and starred here.
+                if (e.id > 0) {
                 QuietButton("Reply", onClick = { onReply(e.id) }, height = 40.dp)
                 when {
                     MailActions.leftUnread(e) -> QuietButton("Mark read", onClick = { vm.markRead(e) }, enabled = !busy, height = 40.dp)
@@ -262,6 +271,7 @@ private fun MessagePage(id: Long, page: MessageViewModel, vm: MailViewModel, onR
                         }
                     }
                 }
+                }
                 if (account?.provider == MailProviders.GMAIL || account?.provider == MailProviders.YAHOO) {
                     QuietButton(
                         if (account?.provider == MailProviders.GMAIL) "Open in Gmail" else "Open in Yahoo",
@@ -284,7 +294,29 @@ private fun MessagePage(id: Long, page: MessageViewModel, vm: MailViewModel, onR
                 Spacer(Modifier.height(8.dp))
                 QuietButton("Try again", onClick = { page.load(id) }, height = 40.dp)
             }
-            is MailReader.Opened.Email -> EmailBody(opened.email, open = { i -> page.attachment(id, i) })
+            is MailReader.Opened.Email -> {
+                val starred = vm.isStarred(e.accountId, e.messageId, starredRows, starring)
+                val changing = e.messageId != null && MailViewModel.starKey(e.accountId, e.messageId) in starring
+                EmailBody(opened.email, open = { i -> page.attachment(id, i) }) {
+                    if (e.messageId != null) {
+                        IconButton(
+                            onClick = {
+                                vm.setStar(
+                                    e.accountId, e.messageId, !starred,
+                                    StarredMail.About(e.fromName, e.fromAddress, e.subject, opened.email.date.takeIf { it > 0 } ?: e.at, seen = true),
+                                )
+                            },
+                            enabled = !changing,
+                        ) {
+                            Icon(
+                                if (starred) Icons.Rounded.Star else Icons.Rounded.StarBorder,
+                                contentDescription = if (starred) "Unstar" else "Star",
+                                tint = if (starred) brand.action else muted,
+                            )
+                        }
+                    }
+                }
+            }
         }
         Spacer(Modifier.height(40.dp))
     }
@@ -292,7 +324,7 @@ private fun MessagePage(id: Long, page: MessageViewModel, vm: MailViewModel, onR
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun EmailBody(email: FullEmail, open: suspend (Int) -> MailReader.Saved?) {
+private fun EmailBody(email: FullEmail, open: suspend (Int) -> MailReader.Saved?, star: @Composable () -> Unit = {}) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val brand = LocalBrand.current
     val context = LocalContext.current
@@ -338,15 +370,18 @@ private fun EmailBody(email: FullEmail, open: suspend (Int) -> MailReader.Saved?
         }
     }
     val html = email.html
-    if (html != null) {
-        if (email.loadsFromWeb && !pictures) {
-            Row(Modifier.padding(horizontal = 20.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                // The button on the left, easy to reach with the left thumb.
-                QuietButton("Show pictures", onClick = { pictures = true }, height = 36.dp)
-                Spacer(Modifier.width(12.dp))
-                Text("Pictures are off, so the sender can't see you opened it.", style = MaterialTheme.typography.bodySmall, color = muted, modifier = Modifier.weight(1f))
-            }
+    // The star, with Show pictures beside it when the email has pictures from the internet.
+    Row(Modifier.padding(start = 8.dp, end = 20.dp, top = 2.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        star()
+        if (html != null && email.loadsFromWeb && !pictures) {
+            Spacer(Modifier.width(4.dp))
+            // The button on the left, easy to reach with the left thumb.
+            QuietButton("Show pictures", onClick = { pictures = true }, height = 36.dp)
+            Spacer(Modifier.width(12.dp))
+            Text("Pictures are off, so the sender can't see you opened it.", style = MaterialTheme.typography.bodySmall, color = muted, modifier = Modifier.weight(1f))
         }
+    }
+    if (html != null) {
         Column(
             Modifier
                 .fillMaxWidth()

@@ -53,6 +53,18 @@ data class FullEmail(
     val loadsFromWeb: Boolean,
 )
 
+/** A starred email (or, in Gmail, one marked important), for the Important page. */
+data class MarkedItem(
+    val messageId: String,
+    val fromName: String,
+    val fromAddress: String,
+    val subject: String,
+    val receivedAt: Long,
+    val seen: Boolean,
+    val starred: Boolean,
+    val important: Boolean,
+)
+
 /** Where an email is now, so the app's list can match the email app. */
 enum class MailPlace { INBOX_UNREAD, INBOX_READ, ARCHIVED, GONE }
 
@@ -556,6 +568,116 @@ class MailSession(private val store: IMAPStore, private val provider: String, pr
         } finally {
             runCatching { bin.close(true) }
         }
+    }
+
+    /** Gmail's All Mail: every email but spam and the bin, whatever its labels. */
+    private fun allMail(): IMAPFolder? = special("\\all", "[Gmail]/All Mail")
+
+    /** Where starred emails are looked for: All Mail in Gmail; the inbox and the archive elsewhere. */
+    private fun markedPlaces(): List<IMAPFolder> =
+        if (provider == MailProviders.GMAIL) listOfNotNull(allMail() ?: inbox())
+        else listOfNotNull(inbox(), archive()).distinctBy { it.fullName }
+
+    /**
+     * The newest starred emails, and in Gmail the newest marked important too, at most [max] of each,
+     * newest first. Emails with no Message-ID are left out, as they can't be found again.
+     */
+    fun marked(max: Int): List<MarkedItem> {
+        val out = LinkedHashMap<String, MarkedItem>()
+        for (folder in markedPlaces()) {
+            folder.open(Folder.READ_ONLY)
+            try {
+                val starred = folder.search(FlagTerm(Flags(Flags.Flag.FLAGGED), true)).sortedBy { it.messageNumber }.takeLast(max)
+                val importantUids = if (provider == MailProviders.GMAIL) gmailSearch(folder, "is:important").sorted().takeLast(max) else emptyList()
+                val important = if (importantUids.isEmpty()) emptyList() else folder.getMessagesByUID(importantUids.toLongArray()).filterNotNull()
+                val all = (starred + important).distinctBy { it.messageNumber }.toTypedArray()
+                if (all.isEmpty()) continue
+                folder.fetch(all, FetchProfile().apply {
+                    add(FetchProfile.Item.ENVELOPE)
+                    add(FetchProfile.Item.FLAGS)
+                    add(UIDFolder.FetchProfileItem.UID)
+                })
+                val importantSet = importantUids.toSet()
+                for (m in all) {
+                    val id = runCatching { (m as? MimeMessage)?.messageID }.getOrNull() ?: continue
+                    val from = runCatching { m.from?.firstOrNull() as? InternetAddress }.getOrNull()
+                    val item = MarkedItem(
+                        messageId = id,
+                        fromName = runCatching { from?.personal?.trim() }.getOrNull().orEmpty(),
+                        fromAddress = from?.address?.trim()?.lowercase(Locale.ROOT).orEmpty(),
+                        subject = runCatching { m.subject }.getOrNull().orEmpty(),
+                        receivedAt = runCatching { (m.receivedDate ?: m.sentDate)?.time }.getOrNull() ?: 0L,
+                        seen = runCatching { m.isSet(Flags.Flag.SEEN) }.getOrDefault(false),
+                        starred = runCatching { m.isSet(Flags.Flag.FLAGGED) }.getOrDefault(false),
+                        important = runCatching { folder.getUID(m) in importantSet }.getOrDefault(false),
+                    )
+                    val had = out[id]
+                    out[id] = if (had == null) item else had.copy(starred = had.starred || item.starred, important = had.important || item.important)
+                }
+            } finally {
+                runCatching { folder.close(false) }
+            }
+        }
+        return out.values.sortedByDescending { it.receivedAt }
+    }
+
+    /**
+     * Stars or unstars an email, found by its Message-ID. In Gmail it is also marked important, or
+     * not, so it stays on (or leaves) the Important page the same way there. True when it was found.
+     */
+    fun setStar(messageId: String, on: Boolean): Boolean {
+        var found = false
+        for (folder in markedPlaces()) {
+            folder.open(Folder.READ_WRITE)
+            try {
+                val messages = folder.search(HeaderTerm("Message-ID", messageId))
+                if (messages.isEmpty()) continue
+                found = true
+                folder.setFlags(messages, Flags(Flags.Flag.FLAGGED), on)
+                if (provider == MailProviders.GMAIL) {
+                    folder.fetch(messages, FetchProfile().apply { add(UIDFolder.FetchProfileItem.UID) })
+                    val uids = messages.map { folder.getUID(it) }.filter { it > 0 }
+                    if (uids.isNotEmpty()) gmailLabel(folder, uids, "\\Important", on)
+                }
+            } finally {
+                runCatching { folder.close(false) }
+            }
+        }
+        return found
+    }
+
+    /** UIDs in an open Gmail folder matching a Gmail search ("is:important"), using Gmail's own IMAP search. */
+    private fun gmailSearch(folder: IMAPFolder, query: String): List<Long> {
+        val result = folder.doCommand(IMAPFolder.ProtocolCommand { p ->
+            val args = com.sun.mail.iap.Argument()
+            args.writeAtom("X-GM-RAW")
+            args.writeString(query)
+            val r = p.command("UID SEARCH", args)
+            val uids = ArrayList<Long>()
+            for (resp in r) {
+                if (resp is com.sun.mail.imap.protocol.IMAPResponse && resp.keyEquals("SEARCH")) {
+                    while (true) {
+                        val n = resp.readLong()
+                        if (n < 0) break
+                        uids += n
+                    }
+                }
+            }
+            p.notifyResponseHandlers(r)
+            p.handleResult(r[r.size - 1])
+            uids
+        })
+        return (result as? List<*>)?.filterIsInstance<Long>().orEmpty()
+    }
+
+    /** Adds a Gmail label (like "\\Important") to emails in an open folder, or takes it off. */
+    private fun gmailLabel(folder: IMAPFolder, uids: List<Long>, label: String, on: Boolean) {
+        folder.doCommand(IMAPFolder.ProtocolCommand { p ->
+            val r = p.command("UID STORE ${uids.joinToString(",")} ${if (on) "+" else "-"}X-GM-LABELS ($label)", null)
+            p.notifyResponseHandlers(r)
+            p.handleResult(r[r.size - 1])
+            null
+        })
     }
 
     private val closed = java.util.concurrent.atomic.AtomicBoolean(false)

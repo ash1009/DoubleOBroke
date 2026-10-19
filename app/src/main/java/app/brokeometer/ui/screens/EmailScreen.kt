@@ -97,10 +97,10 @@ import app.brokeometer.ui.theme.LocalBrand
 import app.brokeometer.util.Dates
 
 /** Email's pages in the app's swipe line, in order. */
-internal val emailPageNames = listOf("Activity", "Subscriptions", "What matters")
+internal val emailPageNames = listOf("Activity", "Important", "Subscriptions", "What matters")
 
 /**
- * One of Email's pages: Activity, Subscriptions or What matters. They sit side by side in the app's
+ * One of Email's pages: Activity, Important, Subscriptions or What matters. They sit side by side in the app's
  * swipe line; Setup (accounts, the AI key, reading and sorting) is a page of its own.
  */
 @Composable
@@ -122,6 +122,7 @@ internal fun EmailPage(
     val problem by vm.problem.collectAsStateWithLifecycle()
     val working by vm.working.collectAsStateWithLifecycle()
     val checking by vm.checking.collectAsStateWithLifecycle()
+    val refreshing by vm.refreshing.collectAsStateWithLifecycle()
     val markingAll by vm.markingAll.collectAsStateWithLifecycle()
     val listening = rememberSetupStatus().readsBankAlerts
 
@@ -165,7 +166,7 @@ internal fun EmailPage(
 
     when (page) {
         0 -> ActivityPage(
-            state = ActivityState(log, accounts, problem, working, checking, markingAll, agentOn),
+            state = ActivityState(log, accounts, problem, working, checking, markingAll, agentOn, refreshing),
             actions = ActivityActions(
                 open = { onOpenEmail(it.id) },
                 markRead = { vm.markRead(it) },
@@ -174,6 +175,7 @@ internal fun EmailPage(
                 notSpam = { vm.notSpam(it) },
                 markAllRead = { vm.markAllRead(it) },
                 checkNow = { vm.checkNow() },
+                refresh = { vm.refresh(it) },
                 tidyUp = { vm.tidyUp() },
                 dismissProblem = { vm.dismissProblem() },
                 pickMany = { list, kind -> vm.pickMany(list, kind) },
@@ -183,7 +185,15 @@ internal fun EmailPage(
             top = progressItem,
             vm = vm,
         )
-        1 -> SubscriptionsPage(
+        1 -> ImportantPage(
+            vm = vm,
+            accounts = accounts,
+            log = log,
+            listState = listState,
+            top = progressItem,
+            onOpenEmail = onOpenEmail,
+        )
+        2 -> SubscriptionsPage(
             accounts = accounts,
             senders = senders,
             listState = listState,
@@ -242,7 +252,7 @@ internal fun EmailPage(
     }
 
     // The answer to an unsubscribe shows once, on Subscriptions where it was asked.
-    if (page == 1) {
+    if (page == 2) {
         unsubscribe?.let { (sender, outcome) ->
             LaunchedEffect(outcome) {
                 when (outcome) {

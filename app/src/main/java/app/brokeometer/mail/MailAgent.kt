@@ -83,6 +83,7 @@ class MailAgent(
 
     suspend fun removeAccount(account: MailAccountEntity) {
         dao.deleteSendersOf(account.id)
+        dao.deleteStarredOf(account.id)
         dao.deleteAccount(account.id)
         prefs.setMailPassword(account.address, null)
     }

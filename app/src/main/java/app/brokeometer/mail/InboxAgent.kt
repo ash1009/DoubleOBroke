@@ -116,6 +116,20 @@ class InboxAgent(
     }
 
     /**
+     * Pull to refresh: only the inbox, of one account ([accountId]) or of all of them when null, and
+     * matched with the email app straight away. Check now stays the full check.
+     */
+    suspend fun checkInbox(accountId: Long?) {
+        if (!prefs.mailAgentOn.value) return
+        lock.withLock {
+            for (account in dao.accounts()) {
+                if (accountId == null || account.id == accountId) inbox(account, matchNow = true)
+            }
+            clearAppAlerts()
+        }
+    }
+
+    /**
      * Clears the email apps' notifications for emails the agent dealt with in the last few hours,
      * keeping any for emails it could not decide on.
      */

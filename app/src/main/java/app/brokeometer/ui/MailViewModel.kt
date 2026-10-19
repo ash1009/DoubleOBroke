@@ -9,6 +9,8 @@ import app.brokeometer.mail.MailCategoryEntity
 import app.brokeometer.mail.MailLogEntity
 import app.brokeometer.mail.MailProgress
 import app.brokeometer.mail.MailSenderEntity
+import app.brokeometer.mail.MailStarredEntity
+import app.brokeometer.mail.StarredMail
 import app.brokeometer.mail.UnsubscribeOutcome
 import app.brokeometer.mail.MailActions
 import app.brokeometer.ui.screens.ActivityFilters
@@ -149,6 +151,10 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
     private val _checking = MutableStateFlow(false)
     val checking: StateFlow<Boolean> = _checking
 
+    private val _refreshing = MutableStateFlow(false)
+    /** Pull to refresh is checking. */
+    val refreshing: StateFlow<Boolean> = _refreshing
+
     private val _markingAll = MutableStateFlow(false)
     val markingAll: StateFlow<Boolean> = _markingAll
 
@@ -177,6 +183,23 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
             }
             val added = dao.logCount() - before
             _done.tryEmit(Done(if (added <= 0) "Checked. Nothing new." else "Checked: ${count(added, "new email")}."))
+        }
+    }
+
+    /** Pull to refresh: the inbox of the account picked on Activity (or all of them), nothing else. */
+    fun refresh(accountId: Long?) {
+        if (_refreshing.value || _checking.value) return
+        viewModelScope.launch {
+            _refreshing.value = true
+            agent.note(null)
+            val before = dao.logCount()
+            try {
+                inbox.checkInbox(accountId)
+            } finally {
+                _refreshing.value = false
+            }
+            val added = dao.logCount() - before
+            _done.tryEmit(Done(if (added <= 0) "Nothing new." else "${count(added, "new email")}."))
         }
     }
 
@@ -326,6 +349,63 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun dismissProblem() = agent.note(null)
+
+    // The Important page: starred emails, and in Gmail ones marked important.
+
+    private val starredMail = container.starredMail
+    val starred: StateFlow<List<MailStarredEntity>> =
+        dao.observeStarred().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    private val _starring = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    /** Stars being changed, shown at once while the mailbox catches up ([starKey] to on or off). */
+    val starring: StateFlow<Map<String, Boolean>> = _starring
+
+    private val _syncingStars = MutableStateFlow(false)
+    val syncingStars: StateFlow<Boolean> = _syncingStars
+
+    /** Matches the Important page with the mailboxes: every few minutes on opening it, or when pulled down ([force]). */
+    fun syncStars(force: Boolean) {
+        if (_syncingStars.value) return
+        if (!force && System.currentTimeMillis() - starredMail.syncedAt < StarredMail.SYNC_EVERY_MS) return
+        viewModelScope.launch {
+            _syncingStars.value = true
+            val problem = try {
+                starredMail.sync()
+            } finally {
+                _syncingStars.value = false
+            }
+            if (problem != null) _done.tryEmit(Done(problem))
+        }
+    }
+
+    /** Whether an email is starred (or important), counting a change still on its way. */
+    fun isStarred(accountId: Long, messageId: String?, rows: List<MailStarredEntity>, changing: Map<String, Boolean>): Boolean {
+        val id = messageId ?: return false
+        return changing[starKey(accountId, id)] ?: rows.any { it.accountId == accountId && it.messageId == id }
+    }
+
+    /** Stars or unstars an email, in Gmail or Yahoo too. */
+    fun setStar(accountId: Long, messageId: String?, on: Boolean, about: StarredMail.About) {
+        val id = messageId ?: return
+        val key = starKey(accountId, id)
+        if (key in _starring.value) return
+        _starring.update { it + (key to on) }
+        viewModelScope.launch {
+            val ok = try {
+                starredMail.setStar(accountId, id, on, about)
+            } finally {
+                _starring.update { it - key }
+            }
+            _done.tryEmit(
+                if (!ok) Done("Couldn't reach your email, so the star wasn't changed. Try again.")
+                else Done(if (on) "Starred" else "Unstarred") { setStar(accountId, id, !on, about) },
+            )
+        }
+    }
+
+    companion object {
+        fun starKey(accountId: Long, messageId: String) = "$accountId|$messageId"
+    }
 
     private fun count(n: Int, one: String): String = "${"%,d".format(n)} ${if (n == 1) one else one + "s"}"
 }

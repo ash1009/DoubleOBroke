@@ -36,6 +36,8 @@ Each part of the app is an agent that does a job in the background and asks you 
 - Spam check every few hours, a **Subscriptions** page that unsubscribes in one tap where the list allows it, and a **Needs you** list.
 - Codes (OTP) always notify at once, with a **Copy code** button and no AI in the way.
 - Read, reply, write and attach files inside the app.
+- An **Important** page with every starred email (and, in Gmail, ones marked important). Starring or unstarring in the app does the same in Gmail or Yahoo.
+- Pull down on Activity to check just the inbox of the account picked in the filter.
 
 ### Travel
 - Notes where the phone goes through the day (on the phone only) and works out tube, train and bus trips each night.

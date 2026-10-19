@@ -55,6 +55,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberDateRangePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -121,6 +122,8 @@ class ActivityState(
     val checking: Boolean,
     val markingAll: Boolean,
     val agentOn: Boolean,
+    /** Pull to refresh is checking. */
+    val refreshing: Boolean = false,
 )
 
 data class ActivityActions(
@@ -131,6 +134,8 @@ data class ActivityActions(
     val notSpam: (MailLogEntity) -> Unit,
     val markAllRead: (List<MailLogEntity>) -> Unit,
     val checkNow: () -> Unit,
+    /** Pull to refresh: the inbox of one account (or all of them, when null). */
+    val refresh: (Long?) -> Unit = {},
     val tidyUp: () -> Unit,
     val dismissProblem: () -> Unit,
     val pickMany: (List<MailLogEntity>, MailViewModel.Pick) -> Unit,
@@ -287,7 +292,13 @@ fun ActivityPage(
 
         }
 
-        LazyColumn(Modifier.fillMaxWidth().weight(1f), state = listState, contentPadding = PaddingValues(bottom = 110.dp)) {
+        // Pulling down checks just the inbox of the account picked above (Check now checks everything).
+        PullToRefreshBox(
+            isRefreshing = state.refreshing,
+            onRefresh = { if (state.agentOn) actions.refresh(accountId) },
+            modifier = Modifier.fillMaxWidth().weight(1f),
+        ) {
+        LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 110.dp)) {
             top()
             if (state.problem != null) {
                 item("problem") { NoteCard(state.problem, LocalBrand.current.broke, actions.dismissProblem) }
@@ -322,6 +333,7 @@ fun ActivityPage(
                     ActivityRow(e, withDay = false, account = accountOf(state, e, showAccount), busy = e.id in state.working, actions = rowActions, picking = picking, picked = e.id in picked, onToggle = toggle)
                 }
             }
+        }
         }
     }
 
@@ -499,6 +511,7 @@ fun outcomeOf(e: MailLogEntity): Pair<String, Color> {
         a.MARKED_READ -> "Marked read" to muted
         a.MARKED_UNREAD -> "Marked unread" to brand.action
         a.DELETED -> "Deleted, in the bin" to muted
+        a.STARRED -> "On your Important page" to brand.action
         else -> e.action to muted
     }
 }
