@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
@@ -78,23 +79,33 @@ import app.brokeometer.BuildConfig
 import app.brokeometer.ui.VaultViewModel
 import app.brokeometer.ui.components.ActionButton
 import app.brokeometer.ui.components.BrokeTopBar
+import app.brokeometer.ui.components.EmptyNote
 import app.brokeometer.ui.components.QuietButton
 import app.brokeometer.ui.components.SectionTitle
 import app.brokeometer.ui.theme.LocalBrand
 import app.brokeometer.vault.VaultEntry
 import app.brokeometer.vault.VaultState
 
+/** Passwords' pages, in order. */
+internal val passwordsPageNames = listOf("Passwords", "Setup")
+
+/**
+ * One of Passwords' pages: what's saved, or Setup (bringing them in, fingerprint, the master password).
+ * Both need the vault open first. Messages and questions about the vault show from the first page only,
+ * which is always there beside Setup, so they never show twice.
+ */
 @Composable
-fun PasswordsScreen(vm: VaultViewModel = viewModel()) {
+fun PasswordsScreen(vm: VaultViewModel = viewModel(), page: Int = 0) {
     val state by vm.state.collectAsStateWithLifecycle()
     val pending by vm.pending.collectAsStateWithLifecycle()
     val busy by vm.busy.collectAsStateWithLifecycle()
     val message by vm.message.collectAsStateWithLifecycle()
     val exportFile by vm.exportFile.collectAsStateWithLifecycle()
     val waiting by vm.waitingFile.collectAsStateWithLifecycle()
+    val first = page == 0
     // A file shared from another app is read as soon as the vault is open.
-    androidx.compose.runtime.LaunchedEffect(state is VaultState.Open, waiting) {
-        if (state is VaultState.Open && waiting != null) vm.importWaiting()
+    androidx.compose.runtime.LaunchedEffect(state is VaultState.Open, waiting, first) {
+        if (first && state is VaultState.Open && waiting != null) vm.importWaiting()
     }
     val brand = LocalBrand.current
     val context = LocalContext.current
@@ -103,7 +114,7 @@ fun PasswordsScreen(vm: VaultViewModel = viewModel()) {
     DisposableEffect(Unit) {
         val window = (context as? Activity)?.window
         if (!BuildConfig.DEBUG) window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        onDispose { if (!BuildConfig.DEBUG) window?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE) }
+        onDispose { if (!BuildConfig.DEBUG && first) window?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE) }
     }
 
     var viewing by remember { mutableStateOf<VaultEntry?>(null) }
@@ -120,7 +131,7 @@ fun PasswordsScreen(vm: VaultViewModel = viewModel()) {
         // Inside the app's frame: its top and bottom bars already keep clear of the phone's own bars.
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         floatingActionButton = {
-            if (state is VaultState.Open) {
+            if (first && state is VaultState.Open) {
                 ExtendedFloatingActionButton(
                     onClick = { editing = VaultEntry(title = "") },
                     containerColor = brand.action,
@@ -133,6 +144,17 @@ fun PasswordsScreen(vm: VaultViewModel = viewModel()) {
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when (val s = state) {
+                // Setup waits for the vault to be made or opened on the first page.
+                VaultState.None, is VaultState.Locked -> if (!first) {
+                    EmptyNote(
+                        if (s is VaultState.None) "No vault yet" else "Passwords are locked",
+                        if (s is VaultState.None) "Make your vault on the Passwords page first." else "Unlock them on the Passwords page first.",
+                    )
+                    return@Box
+                }
+                else -> Unit
+            }
+            when (val s = state) {
                 VaultState.None -> CreateVault(busy, waiting != null, onCreate = { a, b -> vm.create(a, b) })
                 is VaultState.Locked -> Unlock(
                     waiting = waiting != null,
@@ -141,18 +163,24 @@ fun PasswordsScreen(vm: VaultViewModel = viewModel()) {
                     onFingerprint = { (context as? FragmentActivity)?.let { vm.unlockWithFingerprint(it) } },
                     onPassword = { vm.unlock(it) },
                 )
-                is VaultState.Open -> OpenVault(
-                    entries = s.entries,
-                    fingerprint = s.fingerprint,
-                    canFingerprint = vm.canUseFingerprint(),
-                    onOpen = { viewing = it },
-                    onPaste = { pasting = true },
-                    onGoogle = { googleHelp = true },
-                    onFingerprint = { on ->
-                        if (on) (context as? FragmentActivity)?.let { vm.enableFingerprint(it) } else vm.disableFingerprint()
-                    },
-                    onChangeMaster = { changingMaster = true },
-                )
+                is VaultState.Open -> if (first) {
+                    OpenVault(
+                        entries = s.entries,
+                        onOpen = { viewing = it },
+                        onLock = { vm.lock() },
+                    )
+                } else {
+                    VaultSetup(
+                        fingerprint = s.fingerprint,
+                        canFingerprint = vm.canUseFingerprint(),
+                        onPaste = { pasting = true },
+                        onGoogle = { googleHelp = true },
+                        onFingerprint = { on ->
+                            if (on) (context as? FragmentActivity)?.let { vm.enableFingerprint(it) } else vm.disableFingerprint()
+                        },
+                        onChangeMaster = { changingMaster = true },
+                    )
+                }
             }
         }
     }
@@ -184,9 +212,6 @@ fun PasswordsScreen(vm: VaultViewModel = viewModel()) {
             pasting = false
         }, onDismiss = { pasting = false })
     }
-    pending?.let { found ->
-        if (state is VaultState.Open) ReviewImport(found, onSave = { vm.saveImport(it) }, onDismiss = { vm.cancelImport() })
-    }
     if (googleHelp) {
         AlertDialog(
             onDismissRequest = { googleHelp = false },
@@ -211,6 +236,10 @@ fun PasswordsScreen(vm: VaultViewModel = viewModel()) {
         )
     }
     if (changingMaster) ChangeMaster(onChange = { a, b -> vm.changeMaster(a, b) { changingMaster = false } }, onDismiss = { changingMaster = false })
+    if (!first) return
+    pending?.let { found ->
+        if (state is VaultState.Open) ReviewImport(found, onSave = { vm.saveImport(it) }, onDismiss = { vm.cancelImport() })
+    }
     exportFile?.let {
         AlertDialog(
             onDismissRequest = { vm.keepExportFile() },
@@ -339,37 +368,23 @@ private fun Unlock(waiting: Boolean, fingerprint: Boolean, busy: Boolean, onFing
 @Composable
 private fun OpenVault(
     entries: List<VaultEntry>,
-    fingerprint: Boolean,
-    canFingerprint: Boolean,
     onOpen: (VaultEntry) -> Unit,
-    onPaste: () -> Unit,
-    onGoogle: () -> Unit,
-    onFingerprint: (Boolean) -> Unit,
-    onChangeMaster: () -> Unit,
+    onLock: () -> Unit,
 ) {
     val brand = LocalBrand.current
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
     var query by remember { mutableStateOf("") }
     val shown = remember(entries, query) {
         val q = query.trim().lowercase()
         if (q.isEmpty()) entries else entries.filter { q in it.title.lowercase() || q in it.username.lowercase() || q in it.url.lowercase() }
     }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {
-        if (!fingerprint && canFingerprint) {
-            item("fp") {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(brand.action.copy(alpha = 0.16f))
-                        .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.Rounded.Fingerprint, contentDescription = null, tint = brand.action)
-                    Spacer(Modifier.width(12.dp))
-                    Text("Unlock with your fingerprint next time?", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { onFingerprint(true) }) { Text("Turn on", color = brand.action) }
-                }
+        item("open") {
+            Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.LockOpen, contentDescription = null, tint = muted, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Open. Locks a minute after you leave the app.", style = MaterialTheme.typography.bodySmall, color = muted, modifier = Modifier.weight(1f))
+                TextButton(onClick = onLock) { Text("Lock now", color = brand.action) }
             }
         }
         item("search") {
@@ -389,34 +404,45 @@ private fun OpenVault(
                     Text("Nothing saved yet", style = MaterialTheme.typography.titleLarge)
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "Add one with the Add button, or bring them all in at once from your Keep note or Google Password Manager below.",
+                        "Add one with the Add button, or bring them all in at once from your Keep note or Google Password Manager in Setup.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = muted,
                     )
                 }
             }
         }
         items(shown, key = { it.id }) { entry -> EntryRow(entry) { onOpen(entry) } }
-        item("import-title") { SectionTitle("Bring them in") }
+    }
+}
+
+/** Passwords' Setup: bringing them in, fingerprint and the master password. */
+@Composable
+private fun VaultSetup(
+    fingerprint: Boolean,
+    canFingerprint: Boolean,
+    onPaste: () -> Unit,
+    onGoogle: () -> Unit,
+    onFingerprint: (Boolean) -> Unit,
+    onChangeMaster: () -> Unit,
+) {
+    val brand = LocalBrand.current
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    CardList {
         item("import") {
-            Column(Modifier.padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            PageCard {
+                CardHead("Bring them in", "Sorting happens on this phone only. Nothing is sent to any AI or website.")
                 QuietButton("Paste a note (like your Keep note)", onClick = onPaste, modifier = Modifier.fillMaxWidth(), height = 48.dp)
                 QuietButton("From Google Password Manager", onClick = onGoogle, modifier = Modifier.fillMaxWidth(), height = 48.dp)
-                Text(
-                    "Sorting happens on this phone only. Nothing is sent to any AI or website.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
         }
-        item("lock-title") { SectionTitle("Lock") }
         item("lock") {
-            Column(Modifier.padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            PageCard {
+                CardHead("Unlocking")
                 if (canFingerprint) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text("Unlock with fingerprint", style = MaterialTheme.typography.titleMedium)
-                            Text("Only on this phone. A new phone needs the master password.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("Only on this phone. A new phone needs the master password.", style = MaterialTheme.typography.bodySmall, color = muted)
                         }
                         Switch(
                             checked = fingerprint,
@@ -425,12 +451,7 @@ private fun OpenVault(
                         )
                     }
                 }
-                Text(
-                    "Passwords lock a minute after you leave the app, or with the lock at the top.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                TextButton(onClick = onChangeMaster) { Text("Change master password", color = brand.action) }
+                QuietButton("Change master password", onClick = onChangeMaster, modifier = Modifier.fillMaxWidth(), height = 44.dp)
             }
         }
     }

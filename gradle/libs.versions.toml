@@ -16,6 +16,7 @@ work = "2.9.1"
 documentfile = "1.0.1"
 orgJson = "20240303"
 javamail = "1.6.7"
+reorderable = "2.4.3"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -41,6 +42,7 @@ androidx-documentfile = { module = "androidx.documentfile:documentfile", version
 android-mail = { module = "com.sun.mail:android-mail", version.ref = "javamail" }
 android-activation = { module = "com.sun.mail:android-activation", version.ref = "javamail" }
 orgjson = { module = "org.json:json", version.ref = "orgJson" }
+reorderable = { module = "sh.calvin.reorderable:reorderable", version.ref = "reorderable" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

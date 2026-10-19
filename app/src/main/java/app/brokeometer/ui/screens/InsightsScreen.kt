@@ -68,7 +68,7 @@ import kotlin.math.abs
 fun InsightsScreen(vm: AppViewModel, onOpenRecap: (Int) -> Unit) {
     val data by vm.insights.collectAsStateWithLifecycle()
     val catalog by vm.catalog.collectAsStateWithLifecycle()
-    // Opened from the Goals button in the top bar, or from a card here.
+    // Opened from a card here.
     val editingGoals by vm.editingGoals.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableStateOf(0) }
 

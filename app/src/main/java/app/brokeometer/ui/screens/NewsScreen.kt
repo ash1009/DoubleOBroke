@@ -31,7 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Remove
-import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -118,31 +118,27 @@ private fun dayName(day: java.time.LocalDate): String {
     }
 }
 
-/** News on a page of its own (from More, or a notification). */
-@Composable
-fun NewsScreen(onBack: () -> Unit, vm: NewsViewModel = viewModel()) {
-    var editing by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        BrokeTopBar("News", onBack = onBack) {
-            IconButton(onClick = { editing = true }) { Icon(Icons.Rounded.Tune, contentDescription = "Topics and timing") }
-        }
-        Box(Modifier.weight(1f).navigationBarsPadding()) {
-            NewsBody(vm, editing = editing, onEditing = { editing = it })
-        }
-    }
-}
+/** News's pages, in order. */
+internal val newsPageNames = listOf("Latest", "History", "Setup")
 
-/**
- * News itself: when the next one comes, the latest briefing (or one picked from the history), each
- * story with its source (tap to read it), then every briefing so far by day, with a search.
- */
+/** One of News's pages: the latest briefing, every briefing so far, or topics and timing. */
 @Composable
 internal fun NewsBody(
     vm: NewsViewModel,
+    page: Int,
     listState: androidx.compose.foundation.lazy.LazyListState = androidx.compose.foundation.lazy.rememberLazyListState(),
-    editing: Boolean = false,
-    onEditing: (Boolean) -> Unit = {},
+    onSetup: () -> Unit = {},
 ) {
+    when (page) {
+        0 -> NewsLatest(vm, listState, onSetup)
+        1 -> NewsHistory(vm, listState)
+        else -> NewsSetup(vm, listState)
+    }
+}
+
+/** When the next one comes, then the latest briefing, each story with its source (tap to read it). */
+@Composable
+private fun NewsLatest(vm: NewsViewModel, listState: androidx.compose.foundation.lazy.LazyListState, onSetup: () -> Unit) {
     val on by vm.on.collectAsStateWithLifecycle()
     val topics by vm.topics.collectAsStateWithLifecycle()
     val every by vm.every.collectAsStateWithLifecycle()
@@ -150,157 +146,151 @@ internal fun NewsBody(
     val making by vm.making.collectAsStateWithLifecycle()
     val problem by vm.problem.collectAsStateWithLifecycle()
     val quietAt by vm.quietAt.collectAsStateWithLifecycle()
-    var editingHere by remember { mutableStateOf(false) }
-    var shownAt by remember { mutableStateOf<Long?>(null) }
-    var query by remember { mutableStateOf("") }
     val brand = LocalBrand.current
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val briefing = briefings.firstOrNull { it.at == shownAt } ?: briefings.firstOrNull()
-    val history = remember(briefings, query) { NewsRules.byDay(NewsRules.search(briefings, query), java.time.ZoneId.systemDefault()) }
+    val briefing = briefings.firstOrNull()
 
-    LazyColumn(
-        Modifier.fillMaxSize(),
-        state = listState,
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
+    CardList(listState) {
         item("status") {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainer)
-                    .padding(horizontal = 18.dp, vertical = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(
+            PageCard {
+                CardHead(
                     when {
                         topics.isEmpty() -> "Pick your topics"
                         on -> if (every == 1) "Every hour while you're awake" else "Every $every hours while you're awake"
                         else -> "Briefings are off"
                     },
-                    style = MaterialTheme.typography.titleLarge,
-                )
-                Text(
                     if (topics.isEmpty()) "Like a news app: follow the topics you care about. Claude searches the web and writes short briefings."
                     else topics.joinToString(", "),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = muted,
                 )
                 val next = vm.nextAround()
-                if (on && next != null) {
+                if (on && next != null && topics.isNotEmpty()) {
                     val nextText = if (next <= System.currentTimeMillis()) "Next one when you're next on your phone." else "Next around ${Dates.clock(next)}."
                     Text("$nextText Each one only has news since the last.", style = MaterialTheme.typography.bodyMedium)
                 }
-                val latest = briefings.firstOrNull()?.at ?: 0L
+                val latest = briefing?.at ?: 0L
                 if (quietAt > latest) Text("Nothing new at ${Dates.clock(quietAt)}, so nothing was sent.", style = MaterialTheme.typography.bodySmall, color = muted)
                 problem?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = brand.broke) }
-                if (making) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                when {
+                    making -> Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(color = brand.action, strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(12.dp))
                         Text("Claude is reading the news. This takes a minute or two.", style = MaterialTheme.typography.bodyMedium, color = muted)
                     }
-                } else if (topics.isEmpty()) {
-                    ActionButton("Pick topics", onClick = { editingHere = true }, modifier = Modifier.fillMaxWidth())
-                } else {
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        QuietButton("Get one now", onClick = {
-                            shownAt = null
-                            vm.makeNow()
-                        }, modifier = Modifier.weight(1f), height = 44.dp)
-                        QuietButton("Topics", onClick = { editingHere = true }, modifier = Modifier.weight(1f), height = 44.dp)
-                    }
+                    topics.isEmpty() -> ActionButton("Pick topics", onClick = onSetup, modifier = Modifier.fillMaxWidth())
+                    else -> QuietButton("Get one now", onClick = { vm.makeNow() }, modifier = Modifier.fillMaxWidth(), height = 44.dp)
                 }
             }
         }
         if (briefing == null) {
             if (topics.isNotEmpty()) item("none") { EmptyNote("No briefing yet", "Get one now, or the first comes while you're on your phone.") }
-            return@LazyColumn
+            return@CardList
         }
         item("when") {
             Text(briefingWhen(briefing.at), style = MaterialTheme.typography.labelLarge, color = muted, modifier = Modifier.padding(start = 4.dp, top = 4.dp))
         }
-        briefing.sections.filter { it.stories.isNotEmpty() }.forEachIndexed { si, section ->
-            item("t-$si") {
-                Text(section.topic, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(start = 4.dp, top = 8.dp))
-            }
-            section.stories.forEachIndexed { j, story -> item("s-$si-$j") {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainer)
-                        .clickable(enabled = story.url.startsWith("http")) {
-                            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(story.url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-                        }
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text(story.headline, style = MaterialTheme.typography.titleMedium)
-                    if (story.summary.isNotBlank()) Text(story.summary, style = MaterialTheme.typography.bodyMedium, color = muted)
-                    if (story.source.isNotBlank()) Text(story.source, style = MaterialTheme.typography.labelMedium, color = brand.action)
-                }
-            } }
+        briefingItems(briefing, "l")
+    }
+}
+
+/** A briefing's topics and stories, as items in a list; [tag] keeps the items' keys apart. */
+private fun androidx.compose.foundation.lazy.LazyListScope.briefingItems(briefing: Briefing, tag: String) {
+    briefing.sections.filter { it.stories.isNotEmpty() }.forEachIndexed { si, section ->
+        item("$tag-t-${briefing.at}-$si") {
+            Text(section.topic, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(start = 4.dp, top = 8.dp))
         }
-        item("history-head") {
-            Column(Modifier.padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("History", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(start = 4.dp))
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    placeholder = { Text("Search old news") },
-                    singleLine = true,
-                    shape = CircleShape,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+        section.stories.forEachIndexed { j, story ->
+            item("$tag-s-${briefing.at}-$si-$j") { StoryCard(story) }
+        }
+    }
+}
+
+@Composable
+private fun StoryCard(story: app.brokeometer.news.Story) {
+    val brand = LocalBrand.current
+    val context = LocalContext.current
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .clickable(enabled = story.url.startsWith("http")) {
+                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(story.url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
             }
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(story.headline, style = MaterialTheme.typography.titleMedium)
+        if (story.summary.isNotBlank()) Text(story.summary, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (story.source.isNotBlank()) Text(story.source, style = MaterialTheme.typography.labelMedium, color = brand.action)
+    }
+}
+
+/** Every briefing so far, by day, with a search. Tap one to read it here. */
+@Composable
+private fun NewsHistory(vm: NewsViewModel, listState: androidx.compose.foundation.lazy.LazyListState) {
+    val briefings by vm.briefings.collectAsStateWithLifecycle()
+    var query by remember { mutableStateOf("") }
+    var open by remember { mutableStateOf<Long?>(null) }
+    val brand = LocalBrand.current
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val history = remember(briefings, query) { NewsRules.byDay(NewsRules.search(briefings, query), java.time.ZoneId.systemDefault()) }
+
+    CardList(listState) {
+        item("search") {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = { Text("Search old news") },
+                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                singleLine = true,
+                shape = CircleShape,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (briefings.isEmpty()) {
+            item("empty") { EmptyNote("No briefings yet", "Every briefing is kept here, so you can come back to it.") }
+            return@CardList
         }
         if (history.isEmpty()) {
-            item("history-none") { Text("Nothing matches.", style = MaterialTheme.typography.bodyMedium, color = muted, modifier = Modifier.padding(start = 4.dp)) }
+            item("none") { Text("Nothing matches.", style = MaterialTheme.typography.bodyMedium, color = muted, modifier = Modifier.padding(start = 4.dp)) }
         }
         history.forEach { (day, list) ->
             item("d-$day") {
                 Text(dayName(day), style = MaterialTheme.typography.labelLarge, color = muted, modifier = Modifier.padding(start = 4.dp, top = 6.dp))
             }
             list.forEach { b ->
+                val isOpen = open == b.at
                 item("b-${b.at}") {
-                    val picked = b.at == briefing.at
                     Row(
                         Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
-                            .clickable {
-                                shownAt = b.at
-                                scope.launch { listState.animateScrollToItem(0) }
-                            }
+                            .clickable { open = if (isOpen) null else b.at }
                             .padding(horizontal = 4.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(Dates.clock(b.at), style = MaterialTheme.typography.titleSmall, color = if (picked) brand.action else MaterialTheme.colorScheme.onSurface, modifier = Modifier.width(56.dp))
+                        Text(Dates.clock(b.at), style = MaterialTheme.typography.titleSmall, color = if (isOpen) brand.action else MaterialTheme.colorScheme.onSurface, modifier = Modifier.width(56.dp))
                         Column(Modifier.weight(1f)) {
                             Text(NewsRules.headlines(b, 1).firstOrNull().orEmpty(), style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             val n = NewsRules.count(b)
-                            Text(if (picked) "$n ${if (n == 1) "story" else "stories"}, showing now" else "$n ${if (n == 1) "story" else "stories"}", style = MaterialTheme.typography.bodySmall, color = muted)
+                            Text(
+                                "$n ${if (n == 1) "story" else "stories"}" + if (isOpen) ", tap to close" else "",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = muted,
+                            )
                         }
                     }
                 }
+                if (isOpen) briefingItems(b, "h")
             }
         }
     }
-    if (editing || editingHere) {
-        TopicsDialog(vm, onDismiss = {
-            editingHere = false
-            onEditing(false)
-        })
-    }
 }
 
+/** News's Setup: briefings on or off, how often, and the topics. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun TopicsDialog(vm: NewsViewModel, onDismiss: () -> Unit) {
+private fun NewsSetup(vm: NewsViewModel, listState: androidx.compose.foundation.lazy.LazyListState) {
     val on by vm.on.collectAsStateWithLifecycle()
     val topics by vm.topics.collectAsStateWithLifecycle()
     val every by vm.every.collectAsStateWithLifecycle()
@@ -311,74 +301,73 @@ private fun TopicsDialog(vm: NewsViewModel, onDismiss: () -> Unit) {
         vm.setTopics(NewsRules.addTopic(topics, typed))
         typed = ""
     }
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Column(Modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = onDismiss) { Icon(Icons.Rounded.Close, contentDescription = "Close") }
-                    Text("Topics and timing", style = MaterialTheme.typography.titleLarge)
-                }
-                Column(
-                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f).padding(end = 12.dp)) {
-                            Text("Briefings", style = MaterialTheme.typography.titleMedium)
-                            Text("A notification when there's something new.", style = MaterialTheme.typography.bodySmall, color = muted)
-                        }
-                        Switch(
-                            checked = on,
-                            onCheckedChange = { vm.setOn(it) },
-                            enabled = topics.isNotEmpty() || on,
-                            colors = SwitchDefaults.colors(checkedTrackColor = brand.action, checkedThumbColor = brand.onAction),
-                        )
+    CardList(listState) {
+        item("timing") {
+            PageCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                        Text("Briefings", style = MaterialTheme.typography.titleLarge)
+                        Text("A notification when there's something new.", style = MaterialTheme.typography.bodySmall, color = muted)
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("While you're awake, every", style = MaterialTheme.typography.titleMedium)
-                            Text("Awake means a few minutes on your phone in the last half hour. Up after sleeping, one comes straight away.", style = MaterialTheme.typography.bodySmall, color = muted)
-                        }
-                        IconButton(onClick = { vm.setEvery(every - 1) }, enabled = every > NewsRules.EVERY_HOURS.first) { Icon(Icons.Rounded.Remove, contentDescription = "More often") }
-                        Text(if (every == 1) "1 hour" else "$every hours", style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center, modifier = Modifier.width(72.dp))
-                        IconButton(onClick = { vm.setEvery(every + 1) }, enabled = every < NewsRules.EVERY_HOURS.last) { Icon(Icons.Rounded.Add, contentDescription = "Less often") }
-                    }
-                    Text("Your topics", style = MaterialTheme.typography.titleMedium)
-                    if (topics.isEmpty()) {
-                        Text("None yet. Add your own below, or tap some popular ones.", style = MaterialTheme.typography.bodyMedium, color = muted)
-                    }
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        topics.forEach { t ->
-                            TopicChip(t, picked = true) { vm.setTopics(topics - t) }
-                        }
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = typed,
-                            onValueChange = { typed = it.take(60) },
-                            placeholder = { Text("Add your own, like UK fintech") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
-                            keyboardActions = KeyboardActions(onDone = { add() }),
-                            modifier = Modifier.weight(1f),
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        TextButton(onClick = add, enabled = typed.isNotBlank()) { Text("Add", color = brand.action) }
-                    }
-                    val popular = NewsRules.PRESETS.filter { p -> topics.none { it.equals(p, ignoreCase = true) } }
-                    if (popular.isNotEmpty()) {
-                        Text("Popular topics", style = MaterialTheme.typography.titleMedium)
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            popular.forEach { p -> TopicChip(p, picked = false) { vm.setTopics(topics + p) } }
-                        }
-                    }
-                    Text(
-                        "Claude searches the web for each topic, so every briefing uses some of your Claude credits.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = muted,
+                    Switch(
+                        checked = on,
+                        onCheckedChange = { vm.setOn(it) },
+                        enabled = topics.isNotEmpty() || on,
+                        colors = SwitchDefaults.colors(checkedTrackColor = brand.action, checkedThumbColor = brand.onAction),
                     )
                 }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("While you're awake, every", style = MaterialTheme.typography.titleMedium)
+                        Text("Awake means a few minutes on your phone in the last half hour. Up after sleeping, one comes straight away.", style = MaterialTheme.typography.bodySmall, color = muted)
+                    }
+                    IconButton(onClick = { vm.setEvery(every - 1) }, enabled = every > NewsRules.EVERY_HOURS.first) { Icon(Icons.Rounded.Remove, contentDescription = "More often") }
+                    Text(if (every == 1) "1 hour" else "$every hours", style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center, modifier = Modifier.width(72.dp))
+                    IconButton(onClick = { vm.setEvery(every + 1) }, enabled = every < NewsRules.EVERY_HOURS.last) { Icon(Icons.Rounded.Add, contentDescription = "Less often") }
+                }
             }
+        }
+        item("topics") {
+            PageCard {
+                CardHead("Your topics", if (topics.isEmpty()) "None yet. Add your own below, or tap some popular ones." else "Tap one to take it off.")
+                if (topics.isNotEmpty()) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        topics.forEach { t -> TopicChip(t, picked = true) { vm.setTopics(topics - t) } }
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = typed,
+                        onValueChange = { typed = it.take(60) },
+                        placeholder = { Text("Add your own, like UK fintech") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { add() }),
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(onClick = add, enabled = typed.isNotBlank()) { Text("Add", color = brand.action) }
+                }
+            }
+        }
+        val popular = NewsRules.PRESETS.filter { p -> topics.none { it.equals(p, ignoreCase = true) } }
+        if (popular.isNotEmpty()) {
+            item("popular") {
+                PageCard {
+                    CardHead("Popular topics")
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        popular.forEach { p -> TopicChip(p, picked = false) { vm.setTopics(topics + p) } }
+                    }
+                }
+            }
+        }
+        item("cost") {
+            Text(
+                "Claude searches the web for each topic, so every briefing uses some of your Claude credits.",
+                style = MaterialTheme.typography.bodySmall,
+                color = muted,
+                modifier = Modifier.padding(horizontal = 4.dp),
+            )
         }
     }
 }

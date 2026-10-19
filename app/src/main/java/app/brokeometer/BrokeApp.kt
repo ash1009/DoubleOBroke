@@ -25,6 +25,7 @@ import app.brokeometer.mail.MailDatabase
 import app.brokeometer.mail.MailNotifier
 import app.brokeometer.mail.MailReader
 import app.brokeometer.mail.StarredMail
+import app.brokeometer.data.LogKinds
 import app.brokeometer.news.NewsAgent
 import app.brokeometer.news.NewsWorker
 import app.brokeometer.notes.NotesDatabase
@@ -89,7 +90,7 @@ class AppContainer(app: BrokeApp) {
     val inboxAgent = InboxAgent(app, mailDatabase.dao(), prefs, mail, mailNotifier, app.scope, repository)
     val mailReader = MailReader(mailDatabase.dao(), prefs, mail)
     val starredMail = StarredMail(mailDatabase.dao(), prefs, mail)
-    val news = NewsAgent(app, claude)
+    val news = NewsAgent(app, claude) { text, outcome -> repository.log(LogKinds.NEWS_SOURCE, "News", text, outcome) }
     val notesDatabase: NotesDatabase = NotesDatabase.create(app)
     val travelDatabase: TravelDatabase = TravelDatabase.create(app)
     val travel = TravelAgent(app, travelDatabase.dao(), repository, prefs).also { capture.travel = it }

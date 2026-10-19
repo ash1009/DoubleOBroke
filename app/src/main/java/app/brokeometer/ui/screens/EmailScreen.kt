@@ -96,12 +96,15 @@ import app.brokeometer.ui.rememberSetupStatus
 import app.brokeometer.ui.theme.LocalBrand
 import app.brokeometer.util.Dates
 
-/** Email's pages in the app's swipe line, in order. */
-internal val emailPageNames = listOf("Activity", "Important", "Subscriptions", "What matters")
+/** Email's pages in the app's swipe line, in order. Setup is last, as on every part of the app. */
+internal val emailPageNames = listOf("Activity", "Important", "Subscriptions", "What matters", "Setup")
+
+/** Where Setup is among Email's pages. */
+internal val EMAIL_SETUP_PAGE = emailPageNames.indexOf("Setup")
 
 /**
- * One of Email's pages: Activity, Important, Subscriptions or What matters. They sit side by side in the app's
- * swipe line; Setup (accounts, the AI key, reading and sorting) is a page of its own.
+ * One of Email's pages: Activity, Important, Subscriptions, What matters or Setup (accounts, the AI key,
+ * reading and sorting). They sit side by side in the app's swipe line.
  */
 @Composable
 internal fun EmailPage(
@@ -111,6 +114,10 @@ internal fun EmailPage(
     onOpenSetup: () -> Unit,
     vm: MailViewModel,
 ) {
+    if (page == EMAIL_SETUP_PAGE) {
+        EmailSetupPage(vm, listState)
+        return
+    }
     val accounts by vm.accounts.collectAsStateWithLifecycle()
     val categories by vm.categories.collectAsStateWithLifecycle()
     val senders by vm.senders.collectAsStateWithLifecycle()
@@ -290,9 +297,9 @@ internal fun EmailPage(
     }
 }
 
-/** Email setup: accounts, the AI key, and reading and sorting. Opened from Email's top bar. */
+/** Email's Setup: accounts, the AI key, and reading and sorting. */
 @Composable
-fun EmailSetupScreen(onBack: () -> Unit, vm: MailViewModel = viewModel()) {
+private fun EmailSetupPage(vm: MailViewModel, listState: LazyListState) {
     val accounts by vm.accounts.collectAsStateWithLifecycle()
     val categories by vm.categories.collectAsStateWithLifecycle()
     val senders by vm.senders.collectAsStateWithLifecycle()
@@ -300,16 +307,11 @@ fun EmailSetupScreen(onBack: () -> Unit, vm: MailViewModel = viewModel()) {
     var adding by remember { mutableStateOf(false) }
     val showProgress = progress.busy || progress.stage == MailProgress.Stage.FAILED || progress.message != null
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = { BrokeTopBar(title = "Email setup", onBack = onBack) },
-    ) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(bottom = 40.dp)) {
-            if (showProgress) {
-                item("progress") { ProgressCard(progress, vm.brainName(), onStop = { vm.stop() }, onDismiss = { vm.dismissProgress() }) }
-            }
-            setup(accounts, categories, senders, progress, vm, onAdd = { adding = true })
+    LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 40.dp)) {
+        if (showProgress) {
+            item("progress") { ProgressCard(progress, vm.brainName(), onStop = { vm.stop() }, onDismiss = { vm.dismissProgress() }) }
         }
+        setup(accounts, categories, senders, progress, vm, onAdd = { adding = true })
     }
     if (adding) AddAccountSheet(vm, onDone = { adding = false })
 }

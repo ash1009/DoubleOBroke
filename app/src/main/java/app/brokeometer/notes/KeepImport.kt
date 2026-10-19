@@ -42,6 +42,8 @@ object KeepImport {
             pinned = o.optBoolean("isPinned"),
             createdAt = created.takeIf { it > 0 } ?: now,
             updatedAt = edited.takeIf { it > 0 } ?: created.takeIf { it > 0 } ?: now,
+            // Newest first, at the top, as in Keep.
+            position = -(edited.takeIf { it > 0 } ?: created.takeIf { it > 0 } ?: now),
             keepKey = "keep|${o.optLong("createdTimestampUsec", 0L)}|${title.trim()}",
         )
         return Parsed(note, archived = o.optBoolean("isArchived"), trashed = o.optBoolean("isTrashed"))

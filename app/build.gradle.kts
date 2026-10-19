@@ -82,6 +82,7 @@ dependencies {
     implementation(libs.compose.foundation)
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons)
+    implementation(libs.reorderable)
 
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)

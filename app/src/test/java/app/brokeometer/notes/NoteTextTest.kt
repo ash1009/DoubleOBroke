@@ -12,7 +12,7 @@ class NoteTextTest {
         val runs = NoteText.runs("# Shopping\nGet **milk** and *bread*")
         assertEquals(
             listOf(
-                Run("Shopping", heading = true),
+                Run("Shopping", heading = 1),
                 Run("\nGet "),
                 Run("milk", bold = true),
                 Run(" and "),
@@ -41,10 +41,17 @@ class NoteTextTest {
 
     @Test
     fun headingsGoOnAndOffTheCursorsLine() {
-        val (on, c) = NoteText.toggleHeading("one\ntwo", 5)
+        val (on, c) = NoteText.setHeading("one\ntwo", 5, 1)
         assertEquals("one\n# two", on)
         assertEquals(7, c)
-        assertEquals("one\ntwo" to 5, NoteText.toggleHeading(on, c))
+        assertEquals("one\ntwo" to 5, NoteText.setHeading(on, c, 1))
+        // From big to small, and the levels read back.
+        val (small, c2) = NoteText.setHeading(on, c, 3)
+        assertEquals("one\n### two", small)
+        assertEquals(9, c2)
+        assertEquals(3, NoteText.headingAt(small, c2))
+        assertEquals(listOf(Run("one\n"), Run("two", heading = 3)), NoteText.runs(small))
+        assertEquals(listOf(Run("A", heading = 2)), NoteText.runs("## A"))
     }
 
     @Test
@@ -69,6 +76,10 @@ class NoteTextTest {
         assertEquals(
             "# Trip\nPack **passport** and *charger*\nDone",
             KeepHtml.toMarks("<h1>Trip</h1><p>Pack <b>passport</b> and <i>charger</i></p>Done"),
+        )
+        assertEquals(
+            "## Day one",
+            KeepHtml.toMarks("<h2>Day one</h2>"),
         )
         assertEquals("Tom & Jerry", KeepHtml.toMarks("Tom &amp; Jerry"))
     }

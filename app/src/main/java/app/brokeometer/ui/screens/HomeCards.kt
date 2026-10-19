@@ -67,7 +67,7 @@ internal fun NewsHomeCard(vm: NewsViewModel, onOpen: () -> Unit) {
                 Text("Pick topics", style = MaterialTheme.typography.labelLarge, color = brand.action, modifier = Modifier.clickable(onClick = onOpen))
             }
             sections.isEmpty() -> Text(
-                if (on) "The first briefing comes while you're on your phone, or get one now on News." else "Briefings are off. Turn them on in News, Topics.",
+                if (on) "The first briefing comes while you're on your phone, or get one now on News." else "Briefings are off. Turn them on in News, Setup.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = muted,
             )
@@ -124,7 +124,7 @@ internal fun NewsHomeCard(vm: NewsViewModel, onOpen: () -> Unit) {
     }
 }
 
-/** Notes on Home: pinned ones first, then the newest, in their colours, and a button for a new note. */
+/** Notes on Home: pinned ones first, then in your order, in their colours, and a button for a new note. */
 @Composable
 internal fun NotesHomeCard(vm: NotesViewModel, onOpen: () -> Unit, onNote: (Long) -> Unit, onNew: () -> Unit) {
     val notes by vm.allNotes.collectAsStateWithLifecycle()
@@ -151,7 +151,7 @@ internal fun NotesHomeCard(vm: NotesViewModel, onOpen: () -> Unit, onNote: (Long
         },
     ) {
         if (notes.isEmpty()) {
-            Text("No notes yet. Write one, or bring yours in from Google Keep on Notes.", style = MaterialTheme.typography.bodyMedium, color = muted)
+            Text("No notes yet. Write one, or bring yours in from Google Keep in Notes, Setup.", style = MaterialTheme.typography.bodyMedium, color = muted)
             return@AgentCard
         }
         notes.take(4).chunked(2).forEach { pair ->
@@ -161,7 +161,7 @@ internal fun NotesHomeCard(vm: NotesViewModel, onOpen: () -> Unit, onNote: (Long
             }
         }
         Text(
-            "Pinned first, then the newest. ${notes.size} ${if (notes.size == 1) "note" else "notes"}.",
+            "Pinned first, then as you arranged them. ${notes.size} ${if (notes.size == 1) "note" else "notes"}.",
             style = MaterialTheme.typography.bodySmall,
             color = muted,
         )

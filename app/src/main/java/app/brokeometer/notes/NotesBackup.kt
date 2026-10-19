@@ -3,11 +3,14 @@ package app.brokeometer.notes
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Notes in the app's backup file: written as a list, and put back only where the phone doesn't have them. */
+/**
+ * Notes in the app's backup file: written as a list, and put back only where the phone doesn't have them.
+ * Notes in the Bin, background photos and voice recordings stay on the phone.
+ */
 object NotesBackup {
 
     fun write(notes: List<NoteEntity>): String = JSONArray().apply {
-        notes.filter { !it.isBlank }.forEach { n ->
+        notes.filter { !it.isBlank && it.deletedAt == null }.forEach { n ->
             put(
                 JSONObject()
                     .put("title", n.title)
@@ -19,6 +22,7 @@ object NotesBackup {
                     .put("pinned", n.pinned)
                     .put("createdAt", n.createdAt)
                     .put("updatedAt", n.updatedAt)
+                    .put("position", n.position)
                     .putOpt("keepKey", n.keepKey),
             )
         }
@@ -38,6 +42,7 @@ object NotesBackup {
                 pinned = o.optBoolean("pinned"),
                 createdAt = o.optLong("createdAt"),
                 updatedAt = o.optLong("updatedAt"),
+                position = o.optLong("position", 0L),
                 keepKey = if (o.isNull("keepKey")) null else o.optString("keepKey"),
             )
         }

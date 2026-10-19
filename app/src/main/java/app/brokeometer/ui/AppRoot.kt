@@ -67,17 +67,14 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
-import app.brokeometer.ui.screens.NewsScreen
 import app.brokeometer.ui.screens.NoteEditorScreen
-import app.brokeometer.ui.screens.NotesScreen
 import app.brokeometer.ui.screens.ComposeScreen
 import app.brokeometer.ui.screens.MessageScreen
 import app.brokeometer.BuildConfig
 import app.brokeometer.ui.components.Avatar
 import app.brokeometer.ui.screens.AccountScreen
-import app.brokeometer.ui.screens.EmailSetupScreen
+import app.brokeometer.ui.screens.EMAIL_SETUP_PAGE
 import app.brokeometer.ui.screens.LimitsScreen
-import app.brokeometer.ui.screens.PasswordsPage
 import app.brokeometer.ui.screens.RecapScreen
 import app.brokeometer.ui.screens.LogScreen
 import app.brokeometer.ui.screens.SettingsScreen
@@ -143,7 +140,7 @@ fun AppRoot(vm: AppViewModel, requestedRoute: String?, onRouteHandled: () -> Uni
     val barTicked by vm.barTicked.collectAsStateWithLifecycle()
     val open: (String) -> Unit = { route ->
         // Pages of the main screen, and features with a place in its bottom bar, open there.
-        if (route in Routes.main || route in barTicked) {
+        if (route in Routes.main || route in barTicked || (route == Routes.EMAIL_SETUP && Routes.EMAIL in barTicked)) {
             nav.popBackStack(Routes.HOME, inclusive = false)
             shellTarget = route
         } else {
@@ -154,6 +151,25 @@ fun AppRoot(vm: AppViewModel, requestedRoute: String?, onRouteHandled: () -> Uni
         scope.launch { drawer.close() }
         open(route)
     }
+
+    /** Ways out of the main screen and the parts' own pages. */
+    fun links(): ShellLinks = ShellLinks(
+        openMenu = openMenu,
+        openEmail = { id -> nav.navigate("email/view/$id") },
+        write = { nav.navigate("email/write") },
+        account = { nav.goTo(Routes.ACCOUNT) },
+        recap = { year ->
+            vm.showRecap(year)
+            nav.navigate(Routes.RECAP)
+        },
+        passwords = { nav.goTo(Routes.PASSWORDS) },
+        limits = { page -> nav.navigate("${Routes.LIMITS}?page=$page") { launchSingleTop = true } },
+        news = { nav.goTo(Routes.NEWS) },
+        notes = { nav.goTo(Routes.NOTES) },
+        openNote = { id -> nav.navigate("notes/edit/$id") },
+        newNote = { list -> nav.navigate("notes/edit/-1?list=$list") },
+        openSection = { key, page -> nav.navigate("section/$key?page=$page") },
+    )
 
     LaunchedEffect(requestedRoute) {
         if (requestedRoute != null) {
@@ -277,24 +293,7 @@ fun AppRoot(vm: AppViewModel, requestedRoute: String?, onRouteHandled: () -> Uni
                     app = vm,
                     target = shellTarget,
                     onTargetHandled = { shellTarget = null },
-                    links = ShellLinks(
-                        openMenu = openMenu,
-                        openEmail = { id -> nav.navigate("email/view/$id") },
-                        write = { nav.navigate("email/write") },
-                        emailSetup = { nav.navigate(Routes.EMAIL_SETUP) },
-                        account = { nav.goTo(Routes.ACCOUNT) },
-                        recap = { year ->
-                            vm.showRecap(year)
-                            nav.navigate(Routes.RECAP)
-                        },
-                        passwords = { nav.goTo(Routes.PASSWORDS) },
-                        news = { nav.goTo(Routes.NEWS) },
-                        notes = { nav.goTo(Routes.NOTES) },
-                        openNote = { id -> nav.navigate("notes/edit/$id") },
-                        newNote = { list -> nav.navigate("notes/edit/-1?list=$list") },
-                        openSection = { key, page -> nav.navigate("section/$key?page=$page") },
-                        limits = { page -> nav.navigate("${Routes.LIMITS}?page=$page") { launchSingleTop = true } },
-                    ),
+                    links = links(),
                 )
             }
             composable(Routes.RECAP) { RecapScreen(vm, onBack = { nav.popBackStack() }) }
@@ -308,9 +307,10 @@ fun AppRoot(vm: AppViewModel, requestedRoute: String?, onRouteHandled: () -> Uni
             }
             composable(Routes.ACCOUNT) { AccountScreen(vm, onBack = { nav.popBackStack() }) }
             composable(Routes.LOG) { LogScreen(vm, onBack = { nav.popBackStack() }) }
-            composable(Routes.EMAIL_SETUP) { EmailSetupScreen(onBack = { nav.popBackStack() }) }
-            composable(Routes.PASSWORDS) { PasswordsPage(onBack = { nav.popBackStack() }) }
-            composable(Routes.NEWS) { NewsScreen(onBack = { nav.popBackStack() }) }
+            // Parts with no place in the bottom bar, each on a page of its own, laid out like the rest.
+            composable(Routes.EMAIL_SETUP) { SectionScreen("email", EMAIL_SETUP_PAGE, vm, links(), onBack = { nav.popBackStack() }) }
+            composable(Routes.PASSWORDS) { SectionScreen("passwords", 0, vm, links(), onBack = { nav.popBackStack() }) }
+            composable(Routes.NEWS) { SectionScreen("news", 0, vm, links(), onBack = { nav.popBackStack() }) }
             composable(
                 "section/{key}?page={page}",
                 arguments = listOf(
@@ -322,34 +322,11 @@ fun AppRoot(vm: AppViewModel, requestedRoute: String?, onRouteHandled: () -> Uni
                     key = entry.arguments?.getString("key").orEmpty(),
                     startPage = entry.arguments?.getInt("page") ?: 0,
                     app = vm,
-                    links = ShellLinks(
-                        openMenu = openMenu,
-                        openEmail = { id -> nav.navigate("email/view/$id") },
-                        write = { nav.navigate("email/write") },
-                        emailSetup = { nav.navigate(Routes.EMAIL_SETUP) },
-                        account = { nav.goTo(Routes.ACCOUNT) },
-                        recap = { year ->
-                            vm.showRecap(year)
-                            nav.navigate(Routes.RECAP)
-                        },
-                        passwords = { nav.goTo(Routes.PASSWORDS) },
-                        limits = { page -> nav.navigate("${Routes.LIMITS}?page=$page") { launchSingleTop = true } },
-                        news = { nav.goTo(Routes.NEWS) },
-                        notes = { nav.goTo(Routes.NOTES) },
-                        openNote = { id -> nav.navigate("notes/edit/$id") },
-                        newNote = { list -> nav.navigate("notes/edit/-1?list=$list") },
-                        openSection = { key, page -> nav.navigate("section/$key?page=$page") },
-                    ),
+                    links = links(),
                     onBack = { nav.popBackStack() },
                 )
             }
-            composable(Routes.NOTES) {
-                NotesScreen(
-                    onBack = { nav.popBackStack() },
-                    onOpen = { id -> nav.navigate("notes/edit/$id") },
-                    onNew = { list -> nav.navigate("notes/edit/-1?list=$list") },
-                )
-            }
+            composable(Routes.NOTES) { SectionScreen("notes", 0, vm, links(), onBack = { nav.popBackStack() }) }
             composable(
                 "notes/edit/{id}?list={list}",
                 arguments = listOf(

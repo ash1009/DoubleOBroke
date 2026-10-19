@@ -237,7 +237,7 @@ private fun BalanceCard(vm: AppViewModel) {
 }
 
 @Composable
-private fun BalanceDialog(bankMinor: Long?, oysterMinor: Long?, onSave: (Long, Long) -> Unit, onDismiss: () -> Unit) {
+internal fun BalanceDialog(bankMinor: Long?, oysterMinor: Long?, onSave: (Long, Long) -> Unit, onDismiss: () -> Unit) {
     var bank by remember { mutableStateOf(bankMinor?.let { Money.plain(it) }.orEmpty()) }
     var oyster by remember { mutableStateOf(oysterMinor?.let { Money.plain(it) }.orEmpty()) }
     val bankValue = Money.parseToMinor(bank)

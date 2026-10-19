@@ -401,7 +401,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         prefs.setBar(app.brokeometer.data.Layout.move(prefs.barOrder.value, index, by), prefs.barTicked.value)
     }
 
-    /** The Goals sheet, opened from the top bar on Insights or from a card. */
+    /** The Goals sheet, opened from a card on Insights. (Money, Setup has its own.) */
     private val _editingGoals = MutableStateFlow(false)
     val editingGoals: StateFlow<Boolean> = _editingGoals
 

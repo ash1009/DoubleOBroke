@@ -163,20 +163,6 @@ private fun MoreRow(icon: ImageVector, tint: Color, title: String, line: String,
     }
 }
 
-/** Passwords, as a page of its own (opened from More). */
-@Composable
-fun PasswordsPage(onBack: () -> Unit, vault: VaultViewModel = viewModel()) {
-    val state by vault.state.collectAsStateWithLifecycle()
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        BrokeTopBar("Passwords", onBack = onBack) {
-            if (state is VaultState.Open) {
-                IconButton(onClick = { vault.lock() }) { Icon(Icons.Rounded.Lock, contentDescription = "Lock passwords") }
-            }
-        }
-        Box(Modifier.weight(1f).navigationBarsPadding()) { PasswordsScreen(vault) }
-    }
-}
-
 /** An app's own icon, or its first letter while there's none. */
 @Composable
 internal fun AppIcon(vm: LimitsViewModel, pkg: String, label: String, size: Dp = 40.dp) {

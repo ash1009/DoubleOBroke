@@ -38,7 +38,12 @@ import java.util.concurrent.TimeUnit
  * briefing of what's new since the last one. It shows as a notification and on the News page, and
  * every briefing is kept. The topics and the briefings stay on the phone; only the topics go to Claude.
  */
-class NewsAgent(private val context: Context, private val claude: ClaudeClient) {
+class NewsAgent(
+    private val context: Context,
+    private val claude: ClaudeClient,
+    /** Writes a line in the alert log: the topics, and what happened. */
+    private val log: suspend (text: String, outcome: String) -> Unit = { _, _ -> },
+) {
 
     private val sp = context.getSharedPreferences("news", Context.MODE_PRIVATE)
     private val file = File(context.filesDir, "news.json")
@@ -121,6 +126,7 @@ class NewsAgent(private val context: Context, private val claude: ClaudeClient) 
             when (val reply = claude.askWithSearch(NewsRules.SYSTEM, NewsRules.prompt(topics, LocalDate.now(NewsRules.LONDON), since))) {
                 is ClaudeClient.Reply.Failed -> {
                     note(reply.message)
+                    logged("News: couldn't make one. ${reply.message}")
                     false
                 }
                 is ClaudeClient.Reply.Text -> {
@@ -128,6 +134,7 @@ class NewsAgent(private val context: Context, private val claude: ClaudeClient) 
                     when {
                         briefing == null -> {
                             note("Claude's answer couldn't be read. Try again.")
+                            logged("News: Claude's answer couldn't be read")
                             false
                         }
                         briefing.sections.all { it.stories.isEmpty() } -> {
@@ -135,12 +142,15 @@ class NewsAgent(private val context: Context, private val claude: ClaudeClient) 
                             note(null)
                             sp.edit().putLong(KEY_QUIET, now).apply()
                             _quietAt.value = now
+                            logged("News: nothing new since the last one, nothing sent")
                             true
                         }
                         else -> {
                             save(listOf(briefing) + _briefings.value)
                             note(null)
                             if (notify) notifyReady(briefing)
+                            val n = NewsRules.count(briefing)
+                            logged("News: briefing ready, $n ${if (n == 1) "story" else "stories"}" + if (notify) ", notification sent" else "")
                             true
                         }
                     }
@@ -162,6 +172,10 @@ class NewsAgent(private val context: Context, private val claude: ClaudeClient) 
             today.minusDays(1) -> "$clock yesterday"
             else -> "$clock on ${d.toLocalDate().dayOfMonth} ${d.month.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.UK)}"
         }
+    }
+
+    private suspend fun logged(outcome: String) {
+        runCatching { log(_topics.value.joinToString(", "), outcome) }
     }
 
     private fun note(message: String?) {
