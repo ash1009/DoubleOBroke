@@ -1,5 +1,8 @@
 package app.brokeometer.ui.screens
 
+import app.brokeometer.data.HomeCard
+import app.brokeometer.ui.NotesViewModel
+import app.brokeometer.ui.VaultViewModel
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -79,19 +82,27 @@ internal class HomeActions(
     val openTravel: (Motion?) -> Unit,
     val openTravelSetup: () -> Unit,
     val openLimits: () -> Unit,
+    val openNews: () -> Unit = {},
+    val openNotes: () -> Unit = {},
+    val openNote: (Long) -> Unit = {},
+    val newNote: () -> Unit = {},
+    val openPasswords: () -> Unit = {},
 )
 
 /**
- * Home: a card for each agent, most important first (the order is set in Settings). Each says what
- * needs you and what it handled today. Passwords has no card; it lives under More.
+ * Home: a card for each feature switched on in Settings, in the order picked there. Each says what
+ * needs you and what happened today.
  */
 @Composable
 internal fun HomePage(
-    order: List<String>,
+    cards: List<HomeCard>,
     app: AppViewModel,
     mail: MailViewModel,
     travel: TravelViewModel,
     limits: LimitsViewModel,
+    news: NewsViewModel,
+    notes: NotesViewModel,
+    vault: VaultViewModel,
     listState: LazyListState,
     actions: HomeActions,
 ) {
@@ -106,12 +117,26 @@ internal fun HomePage(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        order.forEach { key ->
-            when (key) {
+        // Every card that's switched on, in the order picked in Settings; with all of them on, Home just scrolls.
+        cards.filter { it.on }.forEach { card ->
+            when (card.key) {
                 "email" -> item("email") { EmailCard(mail, actions) }
                 "money" -> item("money") { MoneyCard(app, actions) }
                 "travel" -> item("travel") { TravelCard(travel, actions) }
+                "news" -> item("news") { NewsHomeCard(news, actions.openNews) }
                 "limits" -> item("limits") { LimitsCard(limits, actions.openLimits) }
+                "notes" -> item("notes") { NotesHomeCard(notes, actions.openNotes, actions.openNote, actions.newNote) }
+                "passwords" -> item("passwords") { PasswordsHomeCard(vault, actions.openPasswords) }
+            }
+        }
+        if (cards.none { it.on }) {
+            item("none") {
+                Text(
+                    "Every card is switched off. Pick the ones you want in Settings, Home.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(8.dp),
+                )
             }
         }
     }

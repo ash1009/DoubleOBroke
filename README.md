@@ -46,13 +46,17 @@ Each part of the app is an agent that does a job in the background and asks you 
 - Stations, fares and routes come from **TfL Open Data**. Peak fares, the bus Hopper and the daily cap are applied, and the trips go to Money as payments waiting.
 - A day timeline of **Stationary**, **Walking** and **Moving fast**, with steps from the phone's step counter.
 
+### Home and the bottom bar
+- Home has a card for every feature: pick which ones show and their order in Settings.
+- Pick up to three features for the bottom bar (Home and More are always there); the rest live under More.
+
 ### Notes
 - Notes and lists like Google Keep: checklists, colours, backgrounds, pinning, **bold**, *italics* and headings, and search.
 - Bring notes in from Google Keep with a Google Takeout export. Notes are in the app's backup too.
 
 ### News
-- A daily briefing on the topics you follow, like a news app: pick popular topics or add your own, and the time it comes.
-- Claude searches the web and writes a few short stories per topic, each with its source and a link. A notification says when it's ready.
+- Briefings on the topics you follow, like a news app: pick popular topics or add your own.
+- Every couple of hours while you're awake, going by your screen time (so it follows however you sleep), Claude searches the web and writes what's new since the last one, with sources and links. Every briefing is kept, with a search.
 
 ### App limits
 - A daily limit for any app, with a suggestion based on your usual week.
@@ -132,7 +136,7 @@ Release builds are signed with a key from the environment when one is given (`SI
 
 ## Tests
 
-171 unit tests cover the parts with the most logic: bank message parsing, money in and transfer matching, category guessing, CSV import and backups, trip finding and fares, the day timeline, screen time maths, limit rules and blocked hours, email prompts and actions, and the vault's encryption and import.
+179 unit tests cover the parts with the most logic: bank message parsing, money in and transfer matching, category guessing, CSV import and backups, trip finding and fares, the day timeline, screen time maths, limit rules and blocked hours, email prompts and actions, and the vault's encryption and import.
 
 During development, the app also ran on an Android emulator in CI, which tapped through it with made-up data and saved the screenshots above.
 

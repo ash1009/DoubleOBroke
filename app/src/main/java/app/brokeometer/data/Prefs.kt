@@ -259,6 +259,40 @@ class Prefs(context: Context) {
         return (saved.filter { it in MORE } + MORE).distinct()
     }
 
+    // Home cards and the bottom bar (see [Layout]). The first time, they come from the agent order and More's order.
+
+    private val firstLayout = Layout.fromOld(readAgentOrder(), readMoreOrder())
+
+    private val _homeCards = MutableStateFlow(Layout.decodeCards(sp.getString(KEY_HOME_CARDS, null)) ?: firstLayout.first)
+    /** The cards on Home, in order, each on or off. */
+    val homeCards: StateFlow<List<HomeCard>> = _homeCards
+
+    fun setHomeCards(cards: List<HomeCard>) {
+        val clean = Layout.cleanCards(cards)
+        sp.edit().putString(KEY_HOME_CARDS, Layout.encodeCards(clean)).apply()
+        _homeCards.value = clean
+    }
+
+    private val _barOrder = MutableStateFlow(
+        sp.getString(KEY_BAR_ORDER, null)?.split(',')?.map { it.trim() }?.let { Layout.cleanOrder(it) } ?: firstLayout.second,
+    )
+    /** Every feature in order: the ticked ones are the bottom bar (and the swipe order), the rest are More. */
+    val barOrder: StateFlow<List<String>> = _barOrder
+
+    private val _barTicked = MutableStateFlow(
+        sp.getString(KEY_BAR_TICKED, null)?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet()
+            ?.let { Layout.cleanTicked(_barOrder.value, it) } ?: firstLayout.third,
+    )
+    val barTicked: StateFlow<Set<String>> = _barTicked
+
+    fun setBar(order: List<String>, ticked: Set<String>) {
+        val o = Layout.cleanOrder(order)
+        val t = Layout.cleanTicked(o, ticked)
+        sp.edit().putString(KEY_BAR_ORDER, o.joinToString(",")).putString(KEY_BAR_TICKED, t.joinToString(",")).apply()
+        _barOrder.value = o
+        _barTicked.value = t
+    }
+
     /** The last day the nightly trip check finished, as yyyy-MM-dd. */
     var lastTravelDay: String
         get() = sp.getString(KEY_LAST_TRAVEL_DAY, "") ?: ""
@@ -378,6 +412,9 @@ class Prefs(context: Context) {
         private const val KEY_BALANCE_AT = "balance_at"
         private const val KEY_AGENT_ORDER = "agent_order"
         private const val KEY_MORE_ORDER = "more_order"
+        private const val KEY_HOME_CARDS = "home_cards"
+        private const val KEY_BAR_ORDER = "bar_order"
+        private const val KEY_BAR_TICKED = "bar_ticked"
         private const val KEY_IMPORTANT_SENDERS = "mail_important_senders"
 
         /** Every agent, in the order you chose to start with: email, money, travel, passwords. */

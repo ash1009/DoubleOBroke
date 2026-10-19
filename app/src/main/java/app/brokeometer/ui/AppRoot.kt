@@ -140,8 +140,10 @@ fun AppRoot(vm: AppViewModel, requestedRoute: String?, onRouteHandled: () -> Uni
     // A page of the main screen asked for from elsewhere; the main screen moves to it.
     var shellTarget by remember { mutableStateOf<String?>(null) }
     val openMenu: () -> Unit = { scope.launch { drawer.open() } }
+    val barTicked by vm.barTicked.collectAsStateWithLifecycle()
     val open: (String) -> Unit = { route ->
-        if (route in Routes.main) {
+        // Pages of the main screen, and features with a place in its bottom bar, open there.
+        if (route in Routes.main || route in barTicked) {
             nav.popBackStack(Routes.HOME, inclusive = false)
             shellTarget = route
         } else {
@@ -288,6 +290,9 @@ fun AppRoot(vm: AppViewModel, requestedRoute: String?, onRouteHandled: () -> Uni
                         passwords = { nav.goTo(Routes.PASSWORDS) },
                         news = { nav.goTo(Routes.NEWS) },
                         notes = { nav.goTo(Routes.NOTES) },
+                        openNote = { id -> nav.navigate("notes/edit/$id") },
+                        newNote = { list -> nav.navigate("notes/edit/-1?list=$list") },
+                        openSection = { key, page -> nav.navigate("section/$key?page=$page") },
                         limits = { page -> nav.navigate("${Routes.LIMITS}?page=$page") { launchSingleTop = true } },
                     ),
                 )
@@ -306,6 +311,38 @@ fun AppRoot(vm: AppViewModel, requestedRoute: String?, onRouteHandled: () -> Uni
             composable(Routes.EMAIL_SETUP) { EmailSetupScreen(onBack = { nav.popBackStack() }) }
             composable(Routes.PASSWORDS) { PasswordsPage(onBack = { nav.popBackStack() }) }
             composable(Routes.NEWS) { NewsScreen(onBack = { nav.popBackStack() }) }
+            composable(
+                "section/{key}?page={page}",
+                arguments = listOf(
+                    navArgument("key") { type = NavType.StringType },
+                    navArgument("page") { type = NavType.IntType; defaultValue = 0 },
+                ),
+            ) { entry ->
+                SectionScreen(
+                    key = entry.arguments?.getString("key").orEmpty(),
+                    startPage = entry.arguments?.getInt("page") ?: 0,
+                    app = vm,
+                    links = ShellLinks(
+                        openMenu = openMenu,
+                        openEmail = { id -> nav.navigate("email/view/$id") },
+                        write = { nav.navigate("email/write") },
+                        emailSetup = { nav.navigate(Routes.EMAIL_SETUP) },
+                        account = { nav.goTo(Routes.ACCOUNT) },
+                        recap = { year ->
+                            vm.showRecap(year)
+                            nav.navigate(Routes.RECAP)
+                        },
+                        passwords = { nav.goTo(Routes.PASSWORDS) },
+                        limits = { page -> nav.navigate("${Routes.LIMITS}?page=$page") { launchSingleTop = true } },
+                        news = { nav.goTo(Routes.NEWS) },
+                        notes = { nav.goTo(Routes.NOTES) },
+                        openNote = { id -> nav.navigate("notes/edit/$id") },
+                        newNote = { list -> nav.navigate("notes/edit/-1?list=$list") },
+                        openSection = { key, page -> nav.navigate("section/$key?page=$page") },
+                    ),
+                    onBack = { nav.popBackStack() },
+                )
+            }
             composable(Routes.NOTES) {
                 NotesScreen(
                     onBack = { nav.popBackStack() },
@@ -320,8 +357,11 @@ fun AppRoot(vm: AppViewModel, requestedRoute: String?, onRouteHandled: () -> Uni
                     navArgument("list") { type = NavType.BoolType; defaultValue = false },
                 ),
             ) { entry ->
-                // The same notes as the Notes page, so a note deleted here can be undone there.
-                val parent = remember(entry) { runCatching { nav.getBackStackEntry(Routes.NOTES) }.getOrNull() }
+                // The same notes as the Notes page (its own, or the one in the main screen), so a note deleted
+                // here can be undone there.
+                val parent = remember(entry) {
+                    runCatching { nav.getBackStackEntry(Routes.NOTES) }.getOrNull() ?: runCatching { nav.getBackStackEntry(Routes.HOME) }.getOrNull()
+                }
                 val notesVm: NotesViewModel = if (parent != null) viewModel(parent) else viewModel()
                 NoteEditorScreen(
                     id = entry.arguments?.getLong("id") ?: -1L,

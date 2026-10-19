@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
@@ -36,6 +37,10 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     val notes: StateFlow<List<NoteEntity>> = combine(dao.observeAll(), _query) { all, q ->
         all.filter { !it.isBlank && NoteText.matches(q, it.title, it.body, it.itemList) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Every note with something in it, pinned first then newest, whatever is searched: for Home. */
+    val allNotes: StateFlow<List<NoteEntity>> = dao.observeAll().map { all -> all.filter { !it.isBlank } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** A line to show once something is done, with an Undo when it can be undone. */
     data class Done(val message: String, val undo: (() -> Unit)? = null)

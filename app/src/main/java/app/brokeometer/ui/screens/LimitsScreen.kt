@@ -183,6 +183,51 @@ fun LimitsScreen(startPage: Int, onBack: () -> Unit, vm: LimitsViewModel = viewM
     if (editingTimes) HoursTimesDialog(vm, onDismiss = { editingTimes = false })
 }
 
+/**
+ * One of App limits' pages inside the main screen, when App limits has a place in the bottom bar. The
+ * wait before loosening anything is shown by the main screen itself, over everything ([HoldScreen]).
+ */
+@Composable
+internal fun LimitsShellPage(vm: LimitsViewModel, page: Int, onGo: (Int) -> Unit) {
+    val done by vm.done.collectAsStateWithLifecycle()
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(done) {
+        val d = done ?: return@LaunchedEffect
+        vm.doneShown()
+        snackbar.showSnackbar(d)
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        vm.refresh()
+        vm.keepFresh(true)
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) { vm.keepFresh(false) }
+    var picking by remember { mutableStateOf<Pick?>(null) }
+    var editing by remember { mutableStateOf<Editing?>(null) }
+    var addingHours by remember { mutableStateOf<Editing?>(null) }
+    var editingTimes by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxSize()) {
+        when (page) {
+            0 -> TodayPage(vm, onAdd = { picking = Pick.LIMIT }, onLimit = { editing = it }, onSetup = { onGo(2) }, onHours = { onGo(1) })
+            1 -> ListPage(vm, onAdd = { picking = Pick.LIMIT }, onEdit = { editing = it }, onAddHours = { picking = Pick.HOURS }, onTimes = { editingTimes = true })
+            else -> SetupPage(vm)
+        }
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
+    }
+    picking?.let { what ->
+        LaunchedEffect(Unit) { vm.loadApps() }
+        val list by vm.limits.collectAsStateWithLifecycle()
+        val hours by vm.hours.collectAsStateWithLifecycle()
+        val exclude = if (what == Pick.LIMIT) list.map { it.pkg }.toSet() else hours.apps.map { it.pkg }.toSet()
+        AppPicker(vm, exclude, onPick = { a ->
+            picking = null
+            if (what == Pick.LIMIT) editing = Editing(a.pkg, a.label) else addingHours = Editing(a.pkg, a.label)
+        }, onDismiss = { picking = null })
+    }
+    editing?.let { e -> LimitDialog(vm, e, onDismiss = { editing = null }) }
+    addingHours?.let { e -> AddHoursDialog(vm, e, onDismiss = { addingHours = null }) }
+    if (editingTimes) HoursTimesDialog(vm, onDismiss = { editingTimes = false })
+}
+
 @Composable
 private fun Card(content: @Composable () -> Unit) {
     Column(
@@ -765,7 +810,7 @@ private fun LimitDialog(vm: LimitsViewModel, e: Editing, onDismiss: () -> Unit) 
 // The wait before loosening
 
 @Composable
-private fun HoldScreen(vm: LimitsViewModel, hold: Hold) {
+internal fun HoldScreen(vm: LimitsViewModel, hold: Hold) {
     val until by vm.holdUntil.collectAsStateWithLifecycle()
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var typed by remember { mutableStateOf("") }

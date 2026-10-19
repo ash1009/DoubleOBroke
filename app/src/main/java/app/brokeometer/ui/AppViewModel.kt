@@ -372,32 +372,33 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setTheme(value: String) = prefs.setTheme(value)
 
-    /** The agents in the order you chose: the bottom bar, the swipe order and the cards on Home. */
-    val agentOrder: StateFlow<List<String>> = prefs.agentOrder
+    /** The cards on Home, in order, each on or off. */
+    val homeCards: StateFlow<List<app.brokeometer.data.HomeCard>> = prefs.homeCards
 
-    /** Moves an agent up (-1) or down (+1) the order. */
-    fun moveAgent(key: String, by: Int) {
-        val order = prefs.agentOrder.value.toMutableList()
-        val from = order.indexOf(key)
-        val to = from + by
-        if (from < 0 || to !in order.indices) return
-        order.removeAt(from)
-        order.add(to, key)
-        prefs.setAgentOrder(order)
+    fun setCardOn(key: String, on: Boolean) {
+        prefs.setHomeCards(prefs.homeCards.value.map { if (it.key == key) it.copy(on = on) else it })
     }
 
-    /** The features on More, in the order you chose. */
-    val moreOrder: StateFlow<List<String>> = prefs.moreOrder
+    /** Moves a Home card up (-1) or down (+1). */
+    fun moveCard(index: Int, by: Int) {
+        prefs.setHomeCards(app.brokeometer.data.Layout.move(prefs.homeCards.value, index, by))
+    }
 
-    /** Moves a feature on More up (-1) or down (+1). */
-    fun moveMore(key: String, by: Int) {
-        val order = prefs.moreOrder.value.toMutableList()
-        val from = order.indexOf(key)
-        val to = from + by
-        if (from < 0 || to !in order.indices) return
-        order.removeAt(from)
-        order.add(to, key)
-        prefs.setMoreOrder(order)
+    /** Every feature in order; the ticked ones are in the bottom bar, the rest under More. */
+    val barOrder: StateFlow<List<String>> = prefs.barOrder
+    val barTicked: StateFlow<Set<String>> = prefs.barTicked
+
+    /** Puts a feature in the bottom bar or takes it out. False when the bar is already full. */
+    fun tickBar(key: String, on: Boolean): Boolean {
+        val order = prefs.barOrder.value
+        val ticked = app.brokeometer.data.Layout.tick(order, prefs.barTicked.value, key, on)
+        prefs.setBar(order, ticked)
+        return !on || key in ticked
+    }
+
+    /** Moves a feature up (-1) or down (+1) in the bar's (and More's) order. */
+    fun moveBar(index: Int, by: Int) {
+        prefs.setBar(app.brokeometer.data.Layout.move(prefs.barOrder.value, index, by), prefs.barTicked.value)
     }
 
     /** The Goals sheet, opened from the top bar on Insights or from a card. */

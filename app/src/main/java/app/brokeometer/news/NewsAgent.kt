@@ -10,9 +10,9 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
-import androidx.work.ExistingWorkPolicy
+import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
-import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import app.brokeometer.BrokeApp
@@ -29,15 +29,14 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.time.Duration
 import java.time.LocalDate
-import java.time.ZonedDateTime
 import java.util.concurrent.TimeUnit
 
 /**
- * The news briefing: once a day, at the time you pick, Claude searches the web for the topics you
- * follow and writes a short briefing. It shows as a notification and on the News page. The topics
- * and the briefings stay on the phone; only the topics go to Claude.
+ * The news briefing: every couple of hours while you're awake (going by your screen time, so it
+ * follows however you sleep), Claude searches the web for the topics you follow and writes a short
+ * briefing of what's new since the last one. It shows as a notification and on the News page, and
+ * every briefing is kept. The topics and the briefings stay on the phone; only the topics go to Claude.
  */
 class NewsAgent(private val context: Context, private val claude: ClaudeClient) {
 
@@ -53,9 +52,18 @@ class NewsAgent(private val context: Context, private val claude: ClaudeClient) 
     /** The topics followed, in order. */
     val topics: StateFlow<List<String>> = _topics
 
-    private val _time = MutableStateFlow(sp.getInt(KEY_TIME, 8 * 60))
-    /** When it comes, in minutes after midnight. */
-    val time: StateFlow<Int> = _time
+    private val _every = MutableStateFlow(sp.getInt(KEY_EVERY, NewsRules.DEFAULT_EVERY).coerceIn(NewsRules.EVERY_HOURS))
+    /** How often it comes while you're awake, in hours. */
+    val every: StateFlow<Int> = _every
+
+    /** When a briefing was last made or tried on its own, so a failed one isn't tried again straight away. */
+    private var lastTriedAt: Long
+        get() = sp.getLong(KEY_TRIED, 0L)
+        set(value) = sp.edit().putLong(KEY_TRIED, value).apply()
+
+    private val _quietAt = MutableStateFlow(sp.getLong(KEY_QUIET, 0L))
+    /** The last time a briefing found nothing new (so nothing was saved or sent). */
+    val quietAt: StateFlow<Long> = _quietAt
 
     private val _briefings = MutableStateFlow(read())
     /** The briefings kept, newest first. */
@@ -79,13 +87,25 @@ class NewsAgent(private val context: Context, private val claude: ClaudeClient) 
         _topics.value = value
     }
 
-    fun setTime(minuteOfDay: Int) {
-        sp.edit().putInt(KEY_TIME, minuteOfDay).apply()
-        _time.value = minuteOfDay
-        NewsWorker.schedule(context)
+    fun setEvery(hours: Int) {
+        sp.edit().putInt(KEY_EVERY, hours.coerceIn(NewsRules.EVERY_HOURS)).apply()
+        _every.value = hours.coerceIn(NewsRules.EVERY_HOURS)
     }
 
-    /** Makes a briefing now. With [notify], a notification says it's ready. True when one was made. */
+    /** The latest briefing's time, or 0. */
+    private fun lastAt(): Long = _briefings.value.firstOrNull()?.at ?: 0L
+
+    /** About when the next one comes (if you're awake then), or null when off or never made. */
+    fun nextAround(): Long? = if (!_on.value || _briefings.value.isEmpty()) null else maxOf(lastAt(), lastTriedAt) + _every.value * 3_600_000L
+
+    /** Whether one is due now, given whether you're [awake]. */
+    fun due(awake: Boolean, now: Long = System.currentTimeMillis()): Boolean =
+        _on.value && _topics.value.isNotEmpty() && NewsRules.due(now, maxOf(lastAt(), lastTriedAt), _every.value, awake)
+
+    /**
+     * Makes a briefing now, of what's new since the last one (or the last day). With [notify], a
+     * notification says it's ready; with nothing new, nothing is saved or sent. True when it worked.
+     */
     suspend fun make(notify: Boolean): Boolean = lock.withLock {
         val topics = _topics.value
         if (topics.isEmpty()) {
@@ -93,27 +113,54 @@ class NewsAgent(private val context: Context, private val claude: ClaudeClient) 
             return@withLock false
         }
         _making.value = true
+        val now = System.currentTimeMillis()
+        if (notify) lastTriedAt = now
         try {
-            when (val reply = claude.askWithSearch(NewsRules.SYSTEM, NewsRules.prompt(topics, LocalDate.now(NewsRules.LONDON)))) {
+            val last = lastAt()
+            val since = if (last > 0 && now - last < 24 * 3_600_000L) sinceText(last, now) else null
+            when (val reply = claude.askWithSearch(NewsRules.SYSTEM, NewsRules.prompt(topics, LocalDate.now(NewsRules.LONDON), since))) {
                 is ClaudeClient.Reply.Failed -> {
                     note(reply.message)
                     false
                 }
                 is ClaudeClient.Reply.Text -> {
-                    val briefing = parse(reply.text, System.currentTimeMillis())
-                    if (briefing == null || briefing.sections.all { it.stories.isEmpty() }) {
-                        note("Claude's answer couldn't be read. Try again.")
-                        false
-                    } else {
-                        save(listOf(briefing) + _briefings.value)
-                        note(null)
-                        if (notify) notifyReady(briefing)
-                        true
+                    val briefing = parse(reply.text, now)
+                    when {
+                        briefing == null -> {
+                            note("Claude's answer couldn't be read. Try again.")
+                            false
+                        }
+                        briefing.sections.all { it.stories.isEmpty() } -> {
+                            // Nothing new since the last one: nothing to keep or send.
+                            note(null)
+                            sp.edit().putLong(KEY_QUIET, now).apply()
+                            _quietAt.value = now
+                            true
+                        }
+                        else -> {
+                            save(listOf(briefing) + _briefings.value)
+                            note(null)
+                            if (notify) notifyReady(briefing)
+                            true
+                        }
                     }
                 }
             }
         } finally {
             _making.value = false
+        }
+    }
+
+    /** "10:02 today" or "23:40 yesterday" or "18:05 on 17 October". */
+    private fun sinceText(at: Long, now: Long): String {
+        val zone = NewsRules.LONDON
+        val d = java.time.Instant.ofEpochMilli(at).atZone(zone)
+        val today = java.time.Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+        val clock = NewsRules.clock(d.hour * 60 + d.minute)
+        return when (d.toLocalDate()) {
+            today -> "$clock today"
+            today.minusDays(1) -> "$clock yesterday"
+            else -> "$clock on ${d.toLocalDate().dayOfMonth} ${d.month.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.UK)}"
         }
     }
 
@@ -169,7 +216,9 @@ class NewsAgent(private val context: Context, private val claude: ClaudeClient) 
         private const val NOTIFICATION_ID = 5100
         private const val KEY_ON = "on"
         private const val KEY_TOPICS = "topics"
-        private const val KEY_TIME = "time"
+        private const val KEY_EVERY = "every_hours"
+        private const val KEY_TRIED = "tried_at"
+        private const val KEY_QUIET = "quiet_at"
         private const val KEY_PROBLEM = "problem"
 
         /** A briefing from Claude's answer, or null when there's no JSON in it that reads. */
@@ -211,36 +260,53 @@ class NewsAgent(private val context: Context, private val claude: ClaudeClient) 
     }
 }
 
-/** Makes the day's briefing at the time picked, then sets up the next one. */
+/**
+ * Every quarter of an hour (Android's shortest repeat): when you're awake and one is due, makes a
+ * briefing. Awake means a few minutes of screen time in the last half hour, read from the phone's
+ * own record (the Usage access App limits uses). Without that access, a screen that's on counts.
+ */
 class NewsWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
-        val news = (applicationContext as BrokeApp).container.news
+        val container = (applicationContext as BrokeApp).container
+        val news = container.news
         if (!news.on.value) return Result.success()
-        val made = withContext(Dispatchers.IO) { news.make(notify = true) }
-        if (!made && runAttemptCount < 2) return Result.retry()
-        schedule(applicationContext, fromItself = true)
+        val awake = withContext(Dispatchers.IO) { awake(container.usage) }
+        if (!news.due(awake)) return Result.success()
+        withContext(Dispatchers.IO) { news.make(notify = true) }
         return Result.success()
+    }
+
+    private fun awake(usage: app.brokeometer.limits.UsageReader): Boolean {
+        if (!usage.allowed()) {
+            return applicationContext.getSystemService(android.os.PowerManager::class.java)?.isInteractive == true
+        }
+        val now = System.currentTimeMillis()
+        val from = now - NewsRules.AWAKE_WINDOW_MS
+        // Read from a while before, so an app already open at the start of the half hour counts too.
+        val events = usage.events(from - 3 * 3_600_000L, now)
+        val used = runCatching { app.brokeometer.limits.UsageMath.foreground(events, from, now).values.sum() }.getOrDefault(0L)
+        return NewsRules.awake(used)
     }
 
     companion object {
         private const val NAME = "news-briefing"
+        private const val CHECK = "news-briefing-check"
 
-        /** The next briefing at the time picked, needing the internet. Cancelled when the briefing is off. */
-        fun schedule(context: Context, fromItself: Boolean = false) {
+        /** Checks every 15 minutes while the briefing is on (needing the internet); none while it's off. */
+        fun schedule(context: Context) {
             val news = (context.applicationContext as BrokeApp).container.news
             val work = WorkManager.getInstance(context)
+            // The once-a-day one from before.
+            work.cancelUniqueWork(NAME)
             if (!news.on.value) {
-                work.cancelUniqueWork(NAME)
+                work.cancelUniqueWork(CHECK)
                 return
             }
-            val now = ZonedDateTime.now()
-            val next = NewsRules.nextRun(now, news.time.value)
-            val request = OneTimeWorkRequestBuilder<NewsWorker>()
-                .setInitialDelay(Duration.between(now, next).toMillis(), TimeUnit.MILLISECONDS)
+            val request = PeriodicWorkRequestBuilder<NewsWorker>(15, TimeUnit.MINUTES)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .build()
-            work.enqueueUniqueWork(NAME, if (fromItself) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.REPLACE, request)
+            work.enqueueUniquePeriodicWork(CHECK, ExistingPeriodicWorkPolicy.KEEP, request)
         }
     }
 }

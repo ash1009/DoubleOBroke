@@ -199,6 +199,15 @@ private fun styledText(text: String, headingSize: Float = 18f): AnnotatedString 
  */
 @Composable
 fun NotesScreen(onBack: () -> Unit, onOpen: (Long) -> Unit, onNew: (checklist: Boolean) -> Unit, vm: NotesViewModel = viewModel()) {
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        BrokeTopBar("Notes", onBack = onBack)
+        Box(Modifier.weight(1f).navigationBarsPadding()) { NotesBody(vm, onOpen, onNew) }
+    }
+}
+
+/** Notes itself: search (and Import), the notes, and the buttons for a new note or list. */
+@Composable
+internal fun NotesBody(vm: NotesViewModel, onOpen: (Long) -> Unit, onNew: (checklist: Boolean) -> Unit) {
     val notes by vm.notes.collectAsStateWithLifecycle()
     val query by vm.query.collectAsStateWithLifecycle()
     val importing by vm.importing.collectAsStateWithLifecycle()
@@ -226,39 +235,13 @@ fun NotesScreen(onBack: () -> Unit, onOpen: (Long) -> Unit, onNew: (checklist: B
     val pinned = notes.filter { it.pinned }
     val others = notes.filter { !it.pinned }
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = {
-            BrokeTopBar("Notes", onBack = onBack) {
-                if (importing) {
-                    CircularProgressIndicator(color = brand.action, strokeWidth = 2.dp, modifier = Modifier.padding(12.dp).size(22.dp))
-                } else {
-                    TextButton(onClick = { askImport = true }) { Text("Import", color = brand.action) }
-                }
-            }
-        },
-        snackbarHost = { SnackbarHost(snackbar) },
-        floatingActionButton = {
-            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                FloatingActionButton(onClick = { onNew(true) }, containerColor = MaterialTheme.colorScheme.surfaceContainerHigh) {
-                    Icon(Icons.Rounded.CheckBox, contentDescription = "New list")
-                }
-                ExtendedFloatingActionButton(
-                    onClick = { onNew(false) },
-                    containerColor = brand.action,
-                    contentColor = brand.onAction,
-                    icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-                    text = { Text("Note") },
-                )
-            }
-        },
-    ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
-            // Search, as in Keep: across titles, text and lists.
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            // Search, as in Keep: across titles, text and lists. Import from Keep sits beside it.
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(
                 Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .weight(1f)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                     .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -280,6 +263,12 @@ fun NotesScreen(onBack: () -> Unit, onOpen: (Long) -> Unit, onNew: (checklist: B
                 if (query.isNotEmpty()) {
                     Icon(Icons.Rounded.Close, contentDescription = "Clear search", tint = muted, modifier = Modifier.clickable { vm.search("") })
                 }
+            }
+            if (importing) {
+                CircularProgressIndicator(color = brand.action, strokeWidth = 2.dp, modifier = Modifier.padding(12.dp).size(22.dp))
+            } else {
+                TextButton(onClick = { askImport = true }) { Text("Import", color = brand.action) }
+            }
             }
             if (notes.isEmpty()) {
                 EmptyNote(
@@ -304,6 +293,23 @@ fun NotesScreen(onBack: () -> Unit, onOpen: (Long) -> Unit, onNew: (checklist: B
                 items(others, key = { it.id }) { n -> NoteCard(n) { onOpen(n.id) } }
             }
         }
+        Column(
+            Modifier.align(Alignment.BottomEnd).padding(16.dp),
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            FloatingActionButton(onClick = { onNew(true) }, containerColor = MaterialTheme.colorScheme.surfaceContainerHigh) {
+                Icon(Icons.Rounded.CheckBox, contentDescription = "New list")
+            }
+            ExtendedFloatingActionButton(
+                onClick = { onNew(false) },
+                containerColor = brand.action,
+                contentColor = brand.onAction,
+                icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
+                text = { Text("Note") },
+            )
+        }
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 140.dp))
     }
 
     if (askImport) {
@@ -341,7 +347,8 @@ private fun GridHeading(text: String) {
 }
 
 @Composable
-private fun NoteCard(n: NoteEntity, onClick: () -> Unit) {
+internal fun NoteCard(n: NoteEntity, compact: Boolean = false, onClick: () -> Unit) {
+    val lines = if (compact) 3 else 8
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val color = noteColor(n.color)
     Box(
@@ -355,23 +362,23 @@ private fun NoteCard(n: NoteEntity, onClick: () -> Unit) {
         NotePattern(n.background, Modifier.matchParentSize())
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             if (n.title.isNotBlank()) {
-                Text(n.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                Text(n.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = if (compact) 1 else 3, overflow = TextOverflow.Ellipsis)
             }
             if (n.checklist) {
                 val items = n.itemList
                 val open = items.filter { !it.checked }
-                open.take(8).forEach { item ->
+                open.take(lines).forEach { item ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Rounded.CheckBoxOutlineBlank, contentDescription = null, tint = muted, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text(item.text, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(item.text, style = MaterialTheme.typography.bodyMedium, maxLines = if (compact) 1 else 2, overflow = TextOverflow.Ellipsis)
                     }
                 }
                 val ticked = items.size - open.size
-                if (open.size > 8) Text("…", style = MaterialTheme.typography.bodyMedium, color = muted)
+                if (open.size > lines) Text("…", style = MaterialTheme.typography.bodyMedium, color = muted)
                 if (ticked > 0) Text("+ $ticked ticked", style = MaterialTheme.typography.bodySmall, color = muted)
             } else if (n.body.isNotBlank()) {
-                Text(styledText(n.body, 16f), style = MaterialTheme.typography.bodyMedium, maxLines = 12, overflow = TextOverflow.Ellipsis)
+                Text(styledText(n.body, 16f), style = MaterialTheme.typography.bodyMedium, maxLines = if (compact) 4 else 12, overflow = TextOverflow.Ellipsis)
             }
         }
     }

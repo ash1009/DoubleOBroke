@@ -23,7 +23,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.HourglassBottom
 import androidx.compose.material.icons.rounded.Key
+import androidx.compose.material.icons.rounded.DirectionsSubway
 import androidx.compose.material.icons.rounded.Lightbulb
+import androidx.compose.material.icons.rounded.Mail
+import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.automirrored.rounded.Article
 import androidx.compose.material3.Icon
@@ -63,13 +66,14 @@ internal fun MorePage(
     limits: LimitsViewModel,
     vault: VaultViewModel,
     listState: LazyListState,
-    onLimits: () -> Unit,
-    onPasswords: () -> Unit,
-    onNews: () -> Unit = {},
-    onNotes: () -> Unit = {},
-    /** The features in the order you chose (Settings, Order on More). */
-    order: List<String> = app.brokeometer.data.Prefs.MORE,
+    /** The features with no place in the bar, in the order chosen in Settings, Bottom bar. */
+    order: List<String>,
+    onOpen: (String) -> Unit,
 ) {
+    val onLimits = { onOpen("limits") }
+    val onPasswords = { onOpen("passwords") }
+    val onNews = { onOpen("news") }
+    val onNotes = { onOpen("notes") }
     val list by limits.limits.collectAsStateWithLifecycle()
     val on by limits.on.collectAsStateWithLifecycle()
     val time by limits.time.collectAsStateWithLifecycle()
@@ -80,8 +84,21 @@ internal fun MorePage(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        if (order.isEmpty()) {
+            item("empty") {
+                Text(
+                    "Everything has a place in the bottom bar.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(8.dp),
+                )
+            }
+        }
         order.forEach { key ->
             when (key) {
+                "email" -> item("email") { MoreRow(Icons.Rounded.Mail, LocalBrand.current.action, "Email", "Your inbox, sorted by the agent", { onOpen("email") }) }
+                "money" -> item("money") { MoreRow(Icons.Rounded.Speed, LocalBrand.current.action, "Money", "Spending, payments and insights", { onOpen("money") }) }
+                "travel" -> item("travel") { MoreRow(Icons.Rounded.DirectionsSubway, travelTint(), "Travel", "Trips, fares and your day", { onOpen("travel") }) }
                 "limits" -> item("limits") {
                     val line = when {
                         list.isEmpty() -> "Daily limits for the apps that eat your time"
@@ -109,10 +126,10 @@ internal fun MorePage(
                     val news = (androidx.compose.ui.platform.LocalContext.current.applicationContext as app.brokeometer.BrokeApp).container.news
                     val topics by news.topics.collectAsStateWithLifecycle()
                     val newsOn by news.on.collectAsStateWithLifecycle()
-                    val time by news.time.collectAsStateWithLifecycle()
+                    val every by news.every.collectAsStateWithLifecycle()
                     val line = when {
-                        topics.isEmpty() -> "A daily briefing on the topics you follow"
-                        newsOn -> "Every day at ${app.brokeometer.news.NewsRules.clock(time)}"
+                        topics.isEmpty() -> "Briefings on the topics you follow"
+                        newsOn -> if (every == 1) "Every hour while you're awake" else "Every $every hours while you're awake"
                         else -> "Off"
                     }
                     MoreRow(Icons.AutoMirrored.Rounded.Article, LocalBrand.current.action, "News", line, onNews)

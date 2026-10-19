@@ -115,8 +115,8 @@ fun SettingsScreen(vm: AppViewModel, onBack: () -> Unit, onOpenLog: () -> Unit, 
                 )
             }
 
-            AgentOrder(vm)
-            MoreOrder(vm)
+            HomeCardsSettings(vm)
+            BottomBarSettings(vm)
 
             SectionTitle("Bank alerts")
             Row(
@@ -699,53 +699,89 @@ private fun SettingRow(title: String, body: String, onClick: () -> Unit) {
     }
 }
 
-/** The agents in the order that matters to you, with buttons to move each up or down. */
+/** The cards on Home: each on or off, and moved up or down. With all on, Home just scrolls. */
 @Composable
-private fun AgentOrder(vm: AppViewModel) {
-    val order by vm.agentOrder.collectAsStateWithLifecycle()
+private fun HomeCardsSettings(vm: AppViewModel) {
+    val cards by vm.homeCards.collectAsStateWithLifecycle()
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    SectionTitle("Order of agents")
+    val brand = LocalBrand.current
+    SectionTitle("Home")
     Text(
-        "Most important first. Sets the bottom bar, the order you swipe through, and the cards on Home. The rest are under More, in the order below.",
+        "The cards on Home, top to bottom. Switch off any you don't want; Home just scrolls when they're all on.",
         style = MaterialTheme.typography.bodyMedium,
         color = muted,
         modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
     )
-    order.forEachIndexed { i, key ->
+    cards.forEachIndexed { i, card ->
+        val name = app.brokeometer.data.Layout.name(card.key)
         Row(
             Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 2.dp, bottom = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("${i + 1}", style = MaterialTheme.typography.titleMedium, color = muted, modifier = Modifier.width(28.dp))
-            Text(agentName(key), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-            androidx.compose.material3.IconButton(onClick = { vm.moveAgent(key, -1) }, enabled = i > 0) {
-                Icon(androidx.compose.material.icons.Icons.Rounded.KeyboardArrowUp, contentDescription = "Move ${agentName(key)} up")
+            Text(name, style = MaterialTheme.typography.titleMedium, color = if (card.on) MaterialTheme.colorScheme.onSurface else muted, modifier = Modifier.weight(1f))
+            androidx.compose.material3.IconButton(onClick = { vm.moveCard(i, -1) }, enabled = i > 0) {
+                Icon(androidx.compose.material.icons.Icons.Rounded.KeyboardArrowUp, contentDescription = "Move $name up")
             }
-            androidx.compose.material3.IconButton(onClick = { vm.moveAgent(key, 1) }, enabled = i < order.size - 1) {
-                Icon(androidx.compose.material.icons.Icons.Rounded.KeyboardArrowDown, contentDescription = "Move ${agentName(key)} down")
+            androidx.compose.material3.IconButton(onClick = { vm.moveCard(i, 1) }, enabled = i < cards.size - 1) {
+                Icon(androidx.compose.material.icons.Icons.Rounded.KeyboardArrowDown, contentDescription = "Move $name down")
             }
+            androidx.compose.material3.Switch(
+                checked = card.on,
+                onCheckedChange = { vm.setCardOn(card.key, it) },
+                colors = androidx.compose.material3.SwitchDefaults.colors(checkedTrackColor = brand.action, checkedThumbColor = brand.onAction),
+            )
         }
     }
 }
 
-/** The features on More in the order you chose, with buttons to move each up or down. */
+/**
+ * The bottom bar: tick up to three features (Home and More are always there). The ticked ones are
+ * also the order you swipe through; the rest are under More, in this same order.
+ */
 @Composable
-private fun MoreOrder(vm: AppViewModel) {
-    val order by vm.moreOrder.collectAsStateWithLifecycle()
+private fun BottomBarSettings(vm: AppViewModel) {
+    val order by vm.barOrder.collectAsStateWithLifecycle()
+    val ticked by vm.barTicked.collectAsStateWithLifecycle()
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    SectionTitle("Order on More")
+    val brand = LocalBrand.current
+    var full by remember { mutableStateOf(false) }
+    SectionTitle("Bottom bar")
+    Text(
+        "Tick up to ${app.brokeometer.data.Layout.MAX_BAR}. Home and More are always there. The ticked ones are also the order you swipe through; the rest live under More, in this order.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = muted,
+        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+    )
+    if (full) {
+        Text(
+            "The bar is full. Untick one first.",
+            style = MaterialTheme.typography.bodySmall,
+            color = brand.careful,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp),
+        )
+    }
     order.forEachIndexed { i, key ->
+        val name = app.brokeometer.data.Layout.name(key)
+        val on = key in ticked
         Row(
-            Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 2.dp, bottom = 2.dp),
+            Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 2.dp, bottom = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("${i + 1}", style = MaterialTheme.typography.titleMedium, color = muted, modifier = Modifier.width(28.dp))
-            Text(moreName(key), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-            androidx.compose.material3.IconButton(onClick = { vm.moveMore(key, -1) }, enabled = i > 0) {
-                Icon(androidx.compose.material.icons.Icons.Rounded.KeyboardArrowUp, contentDescription = "Move ${moreName(key)} up")
+            androidx.compose.material3.Checkbox(
+                checked = on,
+                onCheckedChange = { want -> full = !vm.tickBar(key, want) },
+                colors = androidx.compose.material3.CheckboxDefaults.colors(checkedColor = brand.action, checkmarkColor = brand.onAction),
+            )
+            Column(Modifier.weight(1f)) {
+                Text(name, style = MaterialTheme.typography.titleMedium)
+                Text(if (on) "In the bar" else "Under More", style = MaterialTheme.typography.bodySmall, color = muted)
             }
-            androidx.compose.material3.IconButton(onClick = { vm.moveMore(key, 1) }, enabled = i < order.size - 1) {
-                Icon(androidx.compose.material.icons.Icons.Rounded.KeyboardArrowDown, contentDescription = "Move ${moreName(key)} down")
+            androidx.compose.material3.IconButton(onClick = { vm.moveBar(i, -1) }, enabled = i > 0) {
+                Icon(androidx.compose.material.icons.Icons.Rounded.KeyboardArrowUp, contentDescription = "Move $name up")
+            }
+            androidx.compose.material3.IconButton(onClick = { vm.moveBar(i, 1) }, enabled = i < order.size - 1) {
+                Icon(androidx.compose.material.icons.Icons.Rounded.KeyboardArrowDown, contentDescription = "Move $name down")
             }
         }
     }

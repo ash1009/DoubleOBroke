@@ -27,8 +27,45 @@ object NewsRules {
     /** Stories per topic, at most. */
     const val PER_TOPIC = 3
 
-    /** Briefings kept on the phone. */
-    const val KEEP = 14
+    /** Briefings kept on the phone: all of them, up to about a year's worth. */
+    const val KEEP = 3000
+
+    /** How often, in hours, while you're awake: the choices and the usual one. */
+    val EVERY_HOURS = 1..6
+    const val DEFAULT_EVERY = 2
+
+    /** Screen time in the last half hour that means you're awake (a glance at the time isn't). */
+    const val AWAKE_MS = 3 * 60_000L
+    const val AWAKE_WINDOW_MS = 30 * 60_000L
+
+    /** Whether you count as awake: a few minutes on the phone in the last half hour. */
+    fun awake(screenMsLastHalfHour: Long): Boolean = screenMsLastHalfHour >= AWAKE_MS
+
+    /**
+     * Whether a briefing is due: you're awake and the last one (or the last try) was [everyHours] ago or
+     * more. After sleeping, the first time you're up it's always due, so a briefing waits for you.
+     * A few minutes early is close enough, as the check runs every quarter of an hour.
+     */
+    fun due(now: Long, lastAt: Long, everyHours: Int, awake: Boolean): Boolean =
+        awake && now - lastAt >= everyHours * 3_600_000L - 10 * 60_000L
+
+    /** Briefings by day, newest first: (yyyy-MM-dd, that day's briefings). */
+    fun byDay(briefings: List<Briefing>, zone: ZoneId): List<Pair<LocalDate, List<Briefing>>> =
+        briefings.sortedByDescending { it.at }
+            .groupBy { java.time.Instant.ofEpochMilli(it.at).atZone(zone).toLocalDate() }
+            .toList()
+
+    /** Briefings with [query] in a topic, headline or summary. */
+    fun search(briefings: List<Briefing>, query: String): List<Briefing> {
+        val q = query.trim()
+        if (q.isEmpty()) return briefings
+        return briefings.filter { b ->
+            b.sections.any { s -> s.topic.contains(q, true) || s.stories.any { it.headline.contains(q, true) || it.summary.contains(q, true) } }
+        }
+    }
+
+    /** How many stories a briefing has. */
+    fun count(b: Briefing): Int = b.sections.sumOf { it.stories.size }
 
     /** The next time the briefing is due: [minuteOfDay] today, or tomorrow if that has passed (or is less than a minute away). */
     fun nextRun(now: ZonedDateTime, minuteOfDay: Int): ZonedDateTime {
@@ -59,7 +96,7 @@ object NewsRules {
 
     val SYSTEM = """
         You write a short daily news briefing for one person who lives in London.
-        Use web search to find the most important news from the last 24 hours on each topic you are given.
+        Use web search to find the most important news on each topic you are given: from the last 24 hours, or since the last briefing when you are told when that was.
         Write in plain, simple English, as a friend would explain it. Never use em dashes or en dashes.
         Give each story a short headline, one or two sentences on what happened and why it matters, the name of the source, and the link to the article you read.
         Give at most $PER_TOPIC stories per topic, fewer when little happened, and never the same story twice. No opinions.
@@ -67,10 +104,15 @@ object NewsRules {
         {"sections":[{"topic":"the topic as given","stories":[{"headline":"...","summary":"...","source":"...","url":"https://..."}]}]}
     """.trimIndent()
 
-    /** What Claude is asked for: today's date in London and the topics, in order. */
-    fun prompt(topics: List<String>, today: LocalDate): String {
+    /**
+     * What Claude is asked for: today's date in London, the topics in order, and when the last briefing
+     * was ([since], "10:02 today", say), so only news after it comes.
+     */
+    fun prompt(topics: List<String>, today: LocalDate, since: String? = null): String {
         val date = today.format(DateTimeFormatter.ofPattern("EEEE d MMMM yyyy", Locale.UK))
-        return "Today is $date in London. My topics, in this order:\n" + topics.mapIndexed { i, t -> "${i + 1}. $t" }.joinToString("\n")
+        val window = if (since == null) "" else
+            "\nMy last briefing was at $since. Only give news from after that; a topic with nothing new gets no stories."
+        return "Today is $date in London. My topics, in this order:\n" + topics.mapIndexed { i, t -> "${i + 1}. $t" }.joinToString("\n") + window
     }
 
     /** The headlines for the notification: the first story of each topic, a few at most. */

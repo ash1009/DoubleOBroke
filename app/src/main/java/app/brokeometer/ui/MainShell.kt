@@ -22,7 +22,12 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Article
 import androidx.compose.material.icons.rounded.DirectionsSubway
+import androidx.compose.material.icons.rounded.HourglassBottom
+import androidx.compose.material.icons.rounded.Key
+import androidx.compose.material.icons.rounded.Lightbulb
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.Home
@@ -67,9 +72,18 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import app.brokeometer.data.Layout
+import app.brokeometer.vault.VaultState
 import app.brokeometer.mail.MailActions
+import app.brokeometer.ui.screens.HoldScreen
+import app.brokeometer.ui.screens.LimitsShellPage
+import app.brokeometer.ui.screens.NewsBody
+import app.brokeometer.ui.screens.NewsViewModel
+import app.brokeometer.ui.screens.NotesBody
+import app.brokeometer.ui.screens.PasswordsScreen
 import app.brokeometer.travel.Motion
 import app.brokeometer.ui.components.Avatar
+import app.brokeometer.ui.components.BrokeTopBar
 import app.brokeometer.ui.screens.CategoriesScreen
 import app.brokeometer.ui.screens.EmailPage
 import app.brokeometer.ui.screens.HomeActions
@@ -98,7 +112,11 @@ enum class Section(val key: String, val label: String, val pages: List<String>, 
     EMAIL("email", "Email", emailPageNames, Icons.Rounded.Mail),
     MONEY("money", "Money", listOf("This month", "Payments", "Insights", "Months", "Categories", "Money in"), Icons.Rounded.Speed),
     TRAVEL("travel", "Travel", listOf("Activity", "Setup"), Icons.Rounded.DirectionsSubway),
-    /** Features that don't need a place of their own in the bar: App limits, Passwords, and ones to come. */
+    NEWS("news", "News", listOf("News"), Icons.AutoMirrored.Rounded.Article),
+    LIMITS("limits", "App limits", listOf("Today", "Limits", "Setup"), Icons.Rounded.HourglassBottom),
+    NOTES("notes", "Notes", listOf("Notes"), Icons.Rounded.Lightbulb),
+    PASSWORDS("passwords", "Passwords", listOf("Passwords"), Icons.Rounded.Key),
+    /** Every feature without a place in the bar. */
     MORE("more", "More", listOf("More"), Icons.Rounded.MoreHoriz),
 }
 
@@ -108,12 +126,12 @@ data class ShellPage(val section: Section, val inner: Int) {
 }
 
 /**
- * Home first, then each agent with a place in the bar in the order chosen in Settings, each with its
- * pages one after another, and More last.
+ * Home first, then each feature with a place in the bar, in the order chosen in Settings, each with
+ * its pages one after another, and More last.
  */
-fun shellPages(order: List<String>): List<ShellPage> {
-    val agents = order.mapNotNull { key -> Section.entries.firstOrNull { it.key == key && it != Section.HOME && it != Section.MORE } }
-    val sections = listOf(Section.HOME) + agents + Section.MORE
+fun shellPages(bar: List<String>): List<ShellPage> {
+    val inBar = bar.mapNotNull { key -> Section.entries.firstOrNull { it.key == key && it != Section.HOME && it != Section.MORE } }
+    val sections = listOf(Section.HOME) + inBar + Section.MORE
     return sections.flatMap { s -> s.pages.indices.map { ShellPage(s, it) } }
 }
 
@@ -129,6 +147,10 @@ fun shellPageFor(route: String): Pair<Section, Int>? = when (route) {
     Routes.MONEY_IN -> Section.MONEY to 5
     Routes.TRAVEL -> Section.TRAVEL to 0
     Routes.MORE -> Section.MORE to 0
+    Routes.NEWS -> Section.NEWS to 0
+    Routes.LIMITS -> Section.LIMITS to 0
+    Routes.NOTES -> Section.NOTES to 0
+    Routes.PASSWORDS -> Section.PASSWORDS to 0
     else -> null
 }
 
@@ -144,7 +166,58 @@ class ShellLinks(
     val limits: (Int) -> Unit,
     val news: () -> Unit = {},
     val notes: () -> Unit = {},
+    /** A note by its id, to read or change. */
+    val openNote: (Long) -> Unit = {},
+    /** A new note, or a new list. */
+    val newNote: (checklist: Boolean) -> Unit = {},
+    /** A part with no place in the bar (Email, Money or Travel), on a page of its own, at one of its pages. */
+    val openSection: (String, Int) -> Unit = { _, _ -> },
 )
+
+/** The view models the pages share. */
+internal class ShellModels(
+    val app: AppViewModel,
+    val mail: MailViewModel,
+    val travel: TravelViewModel,
+    val vault: VaultViewModel,
+    val limits: LimitsViewModel,
+    val news: NewsViewModel,
+    val notes: NotesViewModel,
+)
+
+/**
+ * One page of a part. [go] moves to another page (of this part or another). Home and More are only
+ * ever shown by the main screen, which passes them in.
+ */
+@Composable
+internal fun ShellPageContent(
+    page: ShellPage,
+    list: androidx.compose.foundation.lazy.LazyListState,
+    m: ShellModels,
+    links: ShellLinks,
+    go: (Section, Int) -> Unit,
+    home: @Composable () -> Unit = {},
+    more: @Composable () -> Unit = {},
+) {
+    when (page.section) {
+        Section.HOME -> home()
+        Section.EMAIL -> EmailPage(page.inner, list, links.openEmail, links.emailSetup, m.mail)
+        Section.MONEY -> when (page.inner) {
+            0 -> MoneyThisMonthPage(m.app, list, onOpenPending = { go(Section.MONEY, 1) }, onOpenInsights = { go(Section.MONEY, 2) })
+            1 -> PaymentsScreen(m.app)
+            2 -> InsightsScreen(m.app, onOpenRecap = links.recap)
+            3 -> MonthScreen(m.app)
+            4 -> CategoriesScreen(m.app)
+            else -> MoneyInScreen(m.app)
+        }
+        Section.TRAVEL -> TravelPage(page.inner, m.travel, list, onOpenPayments = { go(Section.MONEY, 1) }, onOpenSetup = { go(Section.TRAVEL, 1) })
+        Section.NEWS -> NewsBody(m.news, list)
+        Section.LIMITS -> LimitsShellPage(m.limits, page.inner) { go(Section.LIMITS, it) }
+        Section.NOTES -> NotesBody(m.notes, links.openNote, links.newNote)
+        Section.PASSWORDS -> PasswordsScreen(m.vault)
+        Section.MORE -> more()
+    }
+}
 
 /**
  * The main screen: a top bar, the names of the pages in the current part, the pages themselves in one
@@ -153,9 +226,12 @@ class ShellLinks(
  */
 @Composable
 fun MainShell(app: AppViewModel, target: String?, onTargetHandled: () -> Unit, links: ShellLinks) {
-    val order by app.agentOrder.collectAsStateWithLifecycle()
-    val moreOrder by app.moreOrder.collectAsStateWithLifecycle()
-    val pages = remember(order) { shellPages(order) }
+    val cards by app.homeCards.collectAsStateWithLifecycle()
+    val barOrder by app.barOrder.collectAsStateWithLifecycle()
+    val barTicked by app.barTicked.collectAsStateWithLifecycle()
+    val bar = remember(barOrder, barTicked) { Layout.inBar(barOrder, barTicked) }
+    val moreOrder = remember(barOrder, barTicked) { Layout.underMore(barOrder, barTicked) }
+    val pages = remember(bar) { shellPages(bar) }
     val latestPages by rememberUpdatedState(pages)
     val pager = rememberPagerState { pages.size }
     val scope = rememberCoroutineScope()
@@ -163,6 +239,9 @@ fun MainShell(app: AppViewModel, target: String?, onTargetHandled: () -> Unit, l
     val travel: TravelViewModel = viewModel()
     val vault: VaultViewModel = viewModel()
     val limits: LimitsViewModel = viewModel()
+    val news: NewsViewModel = viewModel()
+    val notesVm: NotesViewModel = viewModel()
+    val models = ShellModels(app, mail, travel, vault, limits, news, notesVm)
 
     // The page the swipe started from. Swiping back into the part before it shows that part's first
     // page (Email's Activity, say), not its last; once the swipe settles, the real first page takes over.
@@ -194,7 +273,11 @@ fun MainShell(app: AppViewModel, target: String?, onTargetHandled: () -> Unit, l
         }
     }
 
-    fun go(section: Section, inner: Int = 0) = jump(pages.indexOfFirst { it.section == section && it.inner == inner })
+    fun go(section: Section, inner: Int = 0) {
+        val i = pages.indexOfFirst { it.section == section && it.inner == inner }
+        // A part with no place in the bar opens on its own instead.
+        if (i < 0) openOutside(section, inner, links) else jump(i)
+    }
 
     // The last page seen in each part, for its icon in the bottom bar.
     val lastInner = remember { mutableStateMapOf<Section, Int>() }
@@ -285,14 +368,26 @@ fun MainShell(app: AppViewModel, target: String?, onTargetHandled: () -> Unit, l
                 go(Section.TRAVEL)
             },
             openTravelSetup = { go(Section.TRAVEL, 1) },
-            openLimits = { links.limits(0) },
+            openLimits = { go(Section.LIMITS) },
+            openNews = { go(Section.NEWS) },
+            openNotes = { go(Section.NOTES) },
+            openNote = links.openNote,
+            newNote = { links.newNote(false) },
+            openPasswords = { go(Section.PASSWORDS) },
         )
+    }
+
+    // Loosening App limits waits on a screen of its own, over everything, until it's done or dropped.
+    val hold by limits.hold.collectAsStateWithLifecycle()
+    hold?.let { h ->
+        HoldScreen(limits, h)
+        return
     }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbar) },
-        topBar = { ShellTopBar(current, app, links, onGoals = { app.editGoals(true) }) },
+        topBar = { ShellTopBar(current, app, links, vault, onGoals = { app.editGoals(true) }) },
         bottomBar = {
             BottomBar(
                 sections = pages.map { it.section }.distinct(),
@@ -335,27 +430,102 @@ fun MainShell(app: AppViewModel, target: String?, onTargetHandled: () -> Unit, l
                 val list = rememberLazyListState()
                 val here = pager.settledPage == index
                 LaunchedEffect(here) { if (!here) list.scrollToItem(0) }
-                when (page.section) {
-                    Section.HOME -> HomePage(order, app, mail, travel, limits, list, homeActions)
-                    Section.EMAIL -> EmailPage(page.inner, list, links.openEmail, links.emailSetup, mail)
-                    Section.MONEY -> when (page.inner) {
-                        0 -> MoneyThisMonthPage(app, list, onOpenPending = { go(Section.MONEY, 1) }, onOpenInsights = { go(Section.MONEY, 2) })
-                        1 -> PaymentsScreen(app)
-                        2 -> InsightsScreen(app, onOpenRecap = links.recap)
-                        3 -> MonthScreen(app)
-                        4 -> CategoriesScreen(app)
-                        else -> MoneyInScreen(app)
-                    }
-                    Section.TRAVEL -> TravelPage(page.inner, travel, list, onOpenPayments = { go(Section.MONEY, 1) }, onOpenSetup = { go(Section.TRAVEL, 1) })
-                    Section.MORE -> MorePage(limits, vault, list, onLimits = { links.limits(0) }, onPasswords = links.passwords, onNews = links.news, onNotes = links.notes, order = moreOrder)
-                }
+                ShellPageContent(
+                    page, list, models, links,
+                    go = { s, inner -> go(s, inner) },
+                    home = { HomePage(cards, app, mail, travel, limits, news, notesVm, vault, list, homeActions) },
+                    more = { MorePage(limits, vault, list, order = moreOrder, onOpen = { key -> openMore(key, links) }) },
+                )
             }
         }
     }
 }
 
+/**
+ * Email, Money or Travel on a page of their own, when they have no place in the bottom bar (opened
+ * from More, Home or a notification): the part's pages side by side, with Back to where you were.
+ */
 @Composable
-private fun ShellTopBar(page: ShellPage, app: AppViewModel, links: ShellLinks, onGoals: () -> Unit) {
+fun SectionScreen(key: String, startPage: Int, app: AppViewModel, links: ShellLinks, onBack: () -> Unit) {
+    val section = Section.entries.firstOrNull { it.key == key && it != Section.HOME && it != Section.MORE }
+    if (section == null) {
+        LaunchedEffect(Unit) { onBack() }
+        return
+    }
+    val mail: MailViewModel = viewModel()
+    val models = ShellModels(app, mail, viewModel(), viewModel(), viewModel(), viewModel(), viewModel())
+    val pager = rememberPagerState(initialPage = startPage.coerceIn(0, section.pages.size - 1)) { section.pages.size }
+    val scope = rememberCoroutineScope()
+    val brand = LocalBrand.current
+    val accounts by mail.accounts.collectAsStateWithLifecycle()
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(mail) {
+        mail.done.collect { d ->
+            snackbar.currentSnackbarData?.dismiss()
+            launch {
+                val r = snackbar.showSnackbar(d.message, actionLabel = if (d.undo != null) "Undo" else null, duration = SnackbarDuration.Short)
+                if (r == SnackbarResult.ActionPerformed) d.undo?.invoke()
+            }
+        }
+    }
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        snackbarHost = { SnackbarHost(snackbar) },
+        topBar = {
+            BrokeTopBar(section.label, onBack = onBack) {
+                when {
+                    section == Section.EMAIL -> TextButton(onClick = links.emailSetup) { Text("Setup", color = brand.action) }
+                    section == Section.MONEY && pager.currentPage == 2 -> TextButton(onClick = { app.editGoals(true) }) { Text("Goals", color = brand.action) }
+                }
+            }
+        },
+        floatingActionButton = {
+            if (section == Section.EMAIL && accounts.isNotEmpty()) {
+                ExtendedFloatingActionButton(
+                    text = { Text("Write", style = MaterialTheme.typography.labelLarge) },
+                    icon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                    onClick = links.write,
+                    containerColor = brand.action,
+                    contentColor = brand.onAction,
+                )
+            }
+        },
+    ) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
+            if (section.pages.size > 1) {
+                SectionTabs(section.pages, pager.currentPage) { scope.launch { pager.animateScrollToPage(it) } }
+            }
+            HorizontalPager(state = pager, modifier = Modifier.fillMaxWidth().weight(1f), beyondViewportPageCount = 1) { i ->
+                val list = rememberLazyListState()
+                ShellPageContent(
+                    ShellPage(section, i), list, models, links,
+                    go = { s, inner ->
+                        if (s == section) scope.launch { pager.animateScrollToPage(inner) } else openOutside(s, inner, links)
+                    },
+                )
+            }
+        }
+    }
+}
+
+/** A part that has no place in the bar: Email, Money and Travel open on a page of their own; the rest on theirs. */
+private fun openOutside(section: Section, inner: Int, links: ShellLinks) = when (section) {
+    Section.EMAIL, Section.MONEY, Section.TRAVEL -> links.openSection(section.key, inner)
+    Section.LIMITS -> links.limits(inner)
+    Section.NEWS -> links.news()
+    Section.NOTES -> links.notes()
+    Section.PASSWORDS -> links.passwords()
+    Section.HOME, Section.MORE -> Unit
+}
+
+/** A feature tapped on More (which only lists ones with no place in the bar). */
+private fun openMore(key: String, links: ShellLinks) {
+    val section = Section.entries.firstOrNull { it.key == key } ?: return
+    openOutside(section, 0, links)
+}
+
+@Composable
+private fun ShellTopBar(page: ShellPage, app: AppViewModel, links: ShellLinks, vault: VaultViewModel, onGoals: () -> Unit) {
     val username by app.username.collectAsStateWithLifecycle()
     val avatarVersion by app.avatarVersion.collectAsStateWithLifecycle()
     val brand = LocalBrand.current
@@ -397,6 +567,12 @@ private fun ShellTopBar(page: ShellPage, app: AppViewModel, links: ShellLinks, o
             )
             when {
                 page.section == Section.EMAIL -> TextButton(onClick = links.emailSetup) { Text("Setup", color = brand.action) }
+                page.section == Section.PASSWORDS -> {
+                    val vaultState by vault.state.collectAsStateWithLifecycle()
+                    if (vaultState is VaultState.Open) {
+                        IconButton(onClick = { vault.lock() }) { Icon(Icons.Rounded.Lock, contentDescription = "Lock passwords") }
+                    }
+                }
                 page.section == Section.MONEY && page.inner == 2 -> TextButton(onClick = onGoals, modifier = Modifier.padding(end = 4.dp)) {
                     Icon(Icons.Rounded.Flag, contentDescription = null, tint = brand.action)
                     Spacer(Modifier.width(6.dp))
