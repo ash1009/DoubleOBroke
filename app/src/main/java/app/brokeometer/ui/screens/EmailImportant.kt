@@ -28,6 +28,10 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.BoxScope
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -75,7 +79,7 @@ internal fun ImportantPage(
     val ids = remember(rows, handled) { rows.map { r -> handled[r.accountId to r.messageId] ?: -r.id } }
     val showAccount = accounts.size > 1
 
-    PullToRefreshBox(isRefreshing = syncing, onRefresh = { vm.syncStars(force = true) }, modifier = Modifier.fillMaxSize()) {
+    RefreshBox(busy = syncing, onRefresh = { vm.syncStars(force = true) }, modifier = Modifier.fillMaxSize()) {
         LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 110.dp)) {
             top()
             if (rows.isEmpty()) {
@@ -105,6 +109,39 @@ internal fun ImportantPage(
             }
         }
     }
+}
+
+/**
+ * Pull to refresh that always lets go. Material's pull keeps its arrow on screen until it sees a
+ * refresh start and then end; a check that was turned away (one was already running) or that was
+ * over before the next frame never shows as started, and the arrow just sat there. Here the spinner
+ * runs from the pull until nothing is busy (including [waitFor], something already running that the
+ * pull waits on), and a moment more.
+ */
+@Composable
+internal fun RefreshBox(
+    busy: Boolean,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier,
+    waitFor: Boolean = false,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    var pulled by remember { mutableStateOf(false) }
+    LaunchedEffect(pulled, busy || waitFor) {
+        if (pulled && !busy && !waitFor) {
+            delay(700)
+            pulled = false
+        }
+    }
+    PullToRefreshBox(
+        isRefreshing = busy || pulled,
+        onRefresh = {
+            pulled = true
+            onRefresh()
+        },
+        modifier = modifier,
+        content = content,
+    )
 }
 
 @Composable

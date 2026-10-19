@@ -293,8 +293,9 @@ fun ActivityPage(
         }
 
         // Pulling down checks just the inbox of the account picked above (Check now checks everything).
-        PullToRefreshBox(
-            isRefreshing = state.refreshing,
+        RefreshBox(
+            busy = state.refreshing,
+            waitFor = state.checking,
             onRefresh = { if (state.agentOn) actions.refresh(accountId) },
             modifier = Modifier.fillMaxWidth().weight(1f),
         ) {
