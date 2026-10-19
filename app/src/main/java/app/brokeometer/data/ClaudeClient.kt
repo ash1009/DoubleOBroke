@@ -25,6 +25,16 @@ class ClaudeClient(private val prefs: Prefs) {
 
     /** [smart] picks the stronger model, for jobs such as building the email categories. */
     suspend fun ask(system: String, prompt: String, smart: Boolean = false, maxTokens: Int = 1024): Reply =
+        call(smart) { key, model -> message(key, model, system, prompt, maxTokens) }
+
+    /**
+     * Like [ask] with the stronger model and Claude's web search on (at most [searches] searches),
+     * for the news briefing. Each search costs a little on top of the words.
+     */
+    suspend fun askWithSearch(system: String, prompt: String, maxTokens: Int = 4000, searches: Int = 8): Reply =
+        call(smart = true) { key, model -> searchMessage(key, model, system, prompt, maxTokens, searches) }
+
+    private suspend fun call(smart: Boolean, send: (key: String, model: String) -> String): Reply =
         withContext(Dispatchers.IO) {
             val key = prefs.claudeKey.value.trim()
             if (key.isEmpty()) return@withContext Reply.Failed("No Claude key in the app yet.")
@@ -38,7 +48,7 @@ class ClaudeClient(private val prefs: Prefs) {
             var tries = 0
             while (true) {
                 try {
-                    return@withContext Reply.Text(message(key, model, system, prompt, maxTokens), model)
+                    return@withContext Reply.Text(send(key, model), model)
                 } catch (e: HttpError) {
                     // Busy or rate limited: wait as long as Claude asks (up to a minute) and try again.
                     if ((e.code == 429 || e.code == 529 || e.code >= 500) && tries < 5) {
@@ -94,6 +104,38 @@ class ClaudeClient(private val prefs: Prefs) {
             .joinToString("") { it.optString("text") }
     }
 
+    /**
+     * One answer with web search. A long search can pause part way ("pause_turn"); it is then sent
+     * back as it is so Claude carries on. All the text Claude wrote is returned together.
+     */
+    private fun searchMessage(key: String, model: String, system: String, prompt: String, maxTokens: Int, searches: Int): String {
+        val tool = JSONObject()
+            .put("type", "web_search_20250305")
+            .put("name", "web_search")
+            .put("max_uses", searches)
+            .put("user_location", JSONObject().put("type", "approximate").put("city", "London").put("country", "GB").put("timezone", "Europe/London"))
+        val messages = JSONArray().put(JSONObject().put("role", "user").put("content", prompt))
+        val text = StringBuilder()
+        repeat(4) {
+            val payload = JSONObject()
+                .put("model", model)
+                .put("max_tokens", maxTokens)
+                .put("system", system)
+                .put("messages", messages)
+                .put("tools", JSONArray().put(tool))
+            // Searching takes a while: up to five minutes before giving up.
+            val body = JSONObject(request("POST", "$BASE/messages", key, payload.toString(), readTimeoutMs = 300_000))
+            val content = body.optJSONArray("content") ?: JSONArray()
+            for (i in 0 until content.length()) {
+                val block = content.getJSONObject(i)
+                if (block.optString("type") == "text") text.append(block.optString("text"))
+            }
+            if (body.optString("stop_reason") != "pause_turn") return text.toString()
+            messages.put(JSONObject().put("role", "assistant").put("content", content))
+        }
+        return text.toString()
+    }
+
     private class HttpError(val code: Int, val body: String, val retryAfterSeconds: Long? = null) : Exception("HTTP $code") {
         val noCredit: Boolean get() = body.contains("credit balance", ignoreCase = true)
         val friendly: String
@@ -104,16 +146,17 @@ class ClaudeClient(private val prefs: Prefs) {
                 code == 429 -> "Claude says too many requests. Try again in a minute."
                 code == 529 || code >= 500 -> "Claude is busy or having problems. Try again later."
                 code == 404 -> "That Claude model is not available."
+                code == 400 -> "Claude said: " + (runCatching { JSONObject(body).getJSONObject("error").getString("message") }.getOrNull() ?: "error 400")
                 else -> "Claude said no (error $code)."
             }
     }
 
-    private fun request(method: String, url: String, key: String, json: String?): String {
+    private fun request(method: String, url: String, key: String, json: String?, readTimeoutMs: Int = 120_000): String {
         val c = URL(url).openConnection() as HttpURLConnection
         try {
             c.requestMethod = method
             c.connectTimeout = 15_000
-            c.readTimeout = 120_000
+            c.readTimeout = readTimeoutMs
             c.setRequestProperty("x-api-key", key)
             c.setRequestProperty("anthropic-version", "2023-06-01")
             c.setRequestProperty("Accept", "application/json")

@@ -46,6 +46,10 @@ Each part of the app is an agent that does a job in the background and asks you 
 - Stations, fares and routes come from **TfL Open Data**. Peak fares, the bus Hopper and the daily cap are applied, and the trips go to Money as payments waiting.
 - A day timeline of **Stationary**, **Walking** and **Moving fast**, with steps from the phone's step counter.
 
+### News
+- A daily briefing on the topics you follow, like a news app: pick popular topics or add your own, and the time it comes.
+- Claude searches the web and writes a few short stories per topic, each with its source and a link. A notification says when it's ready.
+
 ### App limits
 - A daily limit for any app, with a suggestion based on your usual week.
 - Blocked hours: apps on the list stay closed at a fixed time every day (say midnight to 7am), with no way out.
@@ -85,10 +89,11 @@ Background work runs on **WorkManager** (nightly trip check, email checks, weekl
 | `capture` | Notification listener, payment capture, money in and transfers, AI category guesses, voice entry |
 | `domain` | Bank message parsers (HSBC, Starling, ICICI), transfer matching, categoriser, CSV import |
 | `data` | Room database, preferences, backups, Claude and Gemini clients |
-| `insights` | Runway, allowances, patterns, currency conversion |
-| `mail` | IMAP client, inbox agent, prompts, OTP codes, notifications |
+| `insights` | Runway, allowances, patterns, bank and Oyster balances, currency conversion |
+| `mail` | IMAP client, inbox agent, starred and important emails, prompts, OTP codes, notifications |
 | `travel` | Location tracking, day timeline, trip finding, TfL client, fares |
-| `limits` | Screen time maths, the watcher service, block screen, device admin |
+| `limits` | Screen time maths, the watcher service, block screen, device admin, blocked hours |
+| `news` | The daily news briefing: topics, Claude with web search, the daily run |
 | `vault` | Encryption and password import |
 | `ui` | ViewModels, screens, components and theme |
 
@@ -122,7 +127,7 @@ Release builds are signed with a key from the environment when one is given (`SI
 
 ## Tests
 
-154 unit tests cover the parts with the most logic: bank message parsing, money in and transfer matching, category guessing, CSV import and backups, trip finding and fares, the day timeline, screen time maths, limit rules and blocked hours, email prompts and actions, and the vault's encryption and import.
+160 unit tests cover the parts with the most logic: bank message parsing, money in and transfer matching, category guessing, CSV import and backups, trip finding and fares, the day timeline, screen time maths, limit rules and blocked hours, email prompts and actions, and the vault's encryption and import.
 
 During development, the app also ran on an Android emulator in CI, which tapped through it with made-up data and saved the screenshots above.
 

@@ -98,8 +98,9 @@ object Routes {
     const val MORE = "more"
     const val LIMITS = "limits"
     const val MONEY_IN = "money/in"
+    const val NEWS = "news"
 
-    val all = setOf(HOME, INSIGHTS, RECAP, PENDING, MONTHS, CATEGORIES, SETTINGS, ACCOUNT, LOG, EMAIL, PASSWORDS, TRAVEL, MONEY, EMAIL_SETUP, MORE, LIMITS, MONEY_IN)
+    val all = setOf(HOME, INSIGHTS, RECAP, PENDING, MONTHS, CATEGORIES, SETTINGS, ACCOUNT, LOG, EMAIL, PASSWORDS, TRAVEL, MONEY, EMAIL_SETUP, MORE, LIMITS, MONEY_IN, NEWS)
 
     /** Pages of the main screen (Home and the agents), as opposed to pages of their own. */
     val main = setOf(HOME, INSIGHTS, PENDING, MONTHS, CATEGORIES, EMAIL, TRAVEL, MONEY, MORE, MONEY_IN)
@@ -280,6 +281,7 @@ fun AppRoot(vm: AppViewModel, requestedRoute: String?, onRouteHandled: () -> Uni
                             nav.navigate(Routes.RECAP)
                         },
                         passwords = { nav.goTo(Routes.PASSWORDS) },
+                        news = { nav.goTo(Routes.NEWS) },
                         limits = { page -> nav.navigate("${Routes.LIMITS}?page=$page") { launchSingleTop = true } },
                     ),
                 )
@@ -297,6 +299,7 @@ fun AppRoot(vm: AppViewModel, requestedRoute: String?, onRouteHandled: () -> Uni
             composable(Routes.LOG) { LogScreen(vm, onBack = { nav.popBackStack() }) }
             composable(Routes.EMAIL_SETUP) { EmailSetupScreen(onBack = { nav.popBackStack() }) }
             composable(Routes.PASSWORDS) { PasswordsPage(onBack = { nav.popBackStack() }) }
+            composable(Routes.NEWS) { app.brokeometer.ui.screens.NewsScreen(onBack = { nav.popBackStack() }) }
             composable(
                 "${Routes.LIMITS}?page={page}",
                 arguments = listOf(navArgument("page") { type = NavType.IntType; defaultValue = 0 }),

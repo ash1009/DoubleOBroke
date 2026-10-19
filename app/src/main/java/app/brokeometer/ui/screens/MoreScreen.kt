@@ -24,6 +24,7 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.HourglassBottom
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.automirrored.rounded.Article
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -63,6 +64,7 @@ internal fun MorePage(
     listState: LazyListState,
     onLimits: () -> Unit,
     onPasswords: () -> Unit,
+    onNews: () -> Unit = {},
 ) {
     val list by limits.limits.collectAsStateWithLifecycle()
     val on by limits.on.collectAsStateWithLifecycle()
@@ -93,6 +95,18 @@ internal fun MorePage(
                 is VaultState.Open -> "Open"
             }
             MoreRow(Icons.Rounded.Key, LocalBrand.current.action, "Passwords", line, onPasswords)
+        }
+        item("news") {
+            val news = (androidx.compose.ui.platform.LocalContext.current.applicationContext as app.brokeometer.BrokeApp).container.news
+            val topics by news.topics.collectAsStateWithLifecycle()
+            val newsOn by news.on.collectAsStateWithLifecycle()
+            val time by news.time.collectAsStateWithLifecycle()
+            val line = when {
+                topics.isEmpty() -> "A daily briefing on the topics you follow"
+                newsOn -> "Every day at ${app.brokeometer.news.NewsRules.clock(time)}"
+                else -> "Off"
+            }
+            MoreRow(Icons.AutoMirrored.Rounded.Article, LocalBrand.current.action, "News", line, onNews)
         }
     }
 }
