@@ -80,6 +80,8 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.brokeometer.limits.AppLimit
+import app.brokeometer.limits.BlockedHours
+import app.brokeometer.limits.HoursRules
 import app.brokeometer.limits.LimitAdmin
 import app.brokeometer.limits.LimitRules
 import app.brokeometer.limits.LimitWatcher
@@ -92,14 +94,20 @@ import app.brokeometer.ui.components.QuietButton
 import app.brokeometer.ui.theme.LocalBrand
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.time.LocalDate
+import java.time.LocalTime
+import java.time.ZoneId
 
 private val limitPages = listOf("Today", "Limits", "Setup")
 
 /** Which app's limit is being set: a new one, or one already on the list. */
 private data class Editing(val pkg: String, val label: String)
 
+/** What an app is being picked for. */
+private enum class Pick { LIMIT, HOURS }
+
 /**
- * App limits: Today (screen time and each limit), Limits (the apps and their limits), and Setup
+ * App limits: Today (screen time and each limit), Limits (the apps and their limits, and blocked hours), and Setup
  * (on or off, and what it needs from the phone). Swipe between them; swiping right on Today goes back.
  */
 @Composable
@@ -128,8 +136,10 @@ fun LimitsScreen(startPage: Int, onBack: () -> Unit, vm: LimitsViewModel = viewM
     val scope = rememberCoroutineScope()
     PageHistory(pager)
     val pull = rememberMenuPull(pager, onBack)
-    var picking by remember { mutableStateOf(false) }
+    var picking by remember { mutableStateOf<Pick?>(null) }
     var editing by remember { mutableStateOf<Editing?>(null) }
+    var addingHours by remember { mutableStateOf<Editing?>(null) }
+    var editingTimes by remember { mutableStateOf(false) }
     val go: (Int) -> Unit = { scope.launch { pager.animateScrollToPage(it) } }
 
     Scaffold(
@@ -145,21 +155,32 @@ fun LimitsScreen(startPage: Int, onBack: () -> Unit, vm: LimitsViewModel = viewM
                 beyondViewportPageCount = 1,
             ) { page ->
                 when (page) {
-                    0 -> TodayPage(vm, onAdd = { picking = true }, onLimit = { editing = it }, onSetup = { go(2) })
-                    1 -> ListPage(vm, onAdd = { picking = true }, onEdit = { editing = it })
+                    0 -> TodayPage(vm, onAdd = { picking = Pick.LIMIT }, onLimit = { editing = it }, onSetup = { go(2) }, onHours = { go(1) })
+                    1 -> ListPage(
+                        vm,
+                        onAdd = { picking = Pick.LIMIT },
+                        onEdit = { editing = it },
+                        onAddHours = { picking = Pick.HOURS },
+                        onTimes = { editingTimes = true },
+                    )
                     else -> SetupPage(vm)
                 }
             }
         }
     }
-    if (picking) {
+    picking?.let { what ->
         LaunchedEffect(Unit) { vm.loadApps() }
-        AppPicker(vm, onPick = { a ->
-            picking = false
-            editing = Editing(a.pkg, a.label)
-        }, onDismiss = { picking = false })
+        val list by vm.limits.collectAsStateWithLifecycle()
+        val hours by vm.hours.collectAsStateWithLifecycle()
+        val exclude = if (what == Pick.LIMIT) list.map { it.pkg }.toSet() else hours.apps.map { it.pkg }.toSet()
+        AppPicker(vm, exclude, onPick = { a ->
+            picking = null
+            if (what == Pick.LIMIT) editing = Editing(a.pkg, a.label) else addingHours = Editing(a.pkg, a.label)
+        }, onDismiss = { picking = null })
     }
     editing?.let { e -> LimitDialog(vm, e, onDismiss = { editing = null }) }
+    addingHours?.let { e -> AddHoursDialog(vm, e, onDismiss = { addingHours = null }) }
+    if (editingTimes) HoursTimesDialog(vm, onDismiss = { editingTimes = false })
 }
 
 @Composable
@@ -182,9 +203,10 @@ private fun Heading(text: String) {
 // Today
 
 @Composable
-private fun TodayPage(vm: LimitsViewModel, onAdd: () -> Unit, onLimit: (Editing) -> Unit, onSetup: () -> Unit) {
+private fun TodayPage(vm: LimitsViewModel, onAdd: () -> Unit, onLimit: (Editing) -> Unit, onSetup: () -> Unit, onHours: () -> Unit) {
     val time by vm.time.collectAsStateWithLifecycle()
     val list by vm.limits.collectAsStateWithLifecycle()
+    val hours by vm.hours.collectAsStateWithLifecycle()
     val day by vm.day.collectAsStateWithLifecycle()
     val on by vm.on.collectAsStateWithLifecycle()
     val perms by vm.perms.collectAsStateWithLifecycle()
@@ -251,6 +273,30 @@ private fun TodayPage(vm: LimitsViewModel, onAdd: () -> Unit, onLimit: (Editing)
                 }
             }
         }
+        if (hours.apps.isNotEmpty()) {
+            item("hours") {
+                val now = LocalTime.now().let { it.hour * 60 + it.minute }
+                val closed = HoursRules.covers(hours.start, hours.end, now)
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainer)
+                        .clickable { onHours() }
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text("Blocked hours", style = MaterialTheme.typography.labelLarge, color = muted)
+                    Text(
+                        if (closed) "On now, until ${HoursRules.clock(hours.end)}" else "${HoursRules.clock(hours.start)} to ${HoursRules.clock(hours.end)}",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = if (closed) brand.careful else MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(hours.apps.joinToString(", ") { it.label }, style = MaterialTheme.typography.bodySmall, color = muted)
+                    hoursWaitingLine(hours)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = brand.careful) }
+                }
+            }
+        }
         if (t != null && t.allowed) {
             val limited = list.map { it.pkg }.toSet()
             // Apps you can open, with at least a minute today.
@@ -283,6 +329,19 @@ private fun TodayPage(vm: LimitsViewModel, onAdd: () -> Unit, onLimit: (Editing)
     }
 }
 
+/** What's waiting to change in blocked hours, if anything. */
+private fun hoursWaitingLine(h: BlockedHours): String? {
+    val c = h.next ?: return null
+    val parts = buildList {
+        if (c.start != null && c.end != null) add("${HoursRules.clock(c.start)} to ${HoursRules.clock(c.end)}")
+        val off = h.apps.filter { it.pkg in c.remove }.map { it.label }
+        if (off.isNotEmpty()) add(off.joinToString(", ") + " off")
+    }
+    if (parts.isEmpty()) return null
+    val at = HoursRules.whenText(c.from, ZoneId.systemDefault(), LocalDate.now())
+    return "From $at: " + parts.joinToString(", ")
+}
+
 /** What's waiting to change for an app, if anything. */
 private fun waitingLine(l: AppLimit): String? {
     val c = l.next ?: return null
@@ -297,7 +356,7 @@ private fun waitingLine(l: AppLimit): String? {
 // Limits
 
 @Composable
-private fun ListPage(vm: LimitsViewModel, onAdd: () -> Unit, onEdit: (Editing) -> Unit) {
+private fun ListPage(vm: LimitsViewModel, onAdd: () -> Unit, onEdit: (Editing) -> Unit, onAddHours: () -> Unit, onTimes: () -> Unit) {
     val list by vm.limits.collectAsStateWithLifecycle()
     val on by vm.on.collectAsStateWithLifecycle()
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -335,11 +394,14 @@ private fun ListPage(vm: LimitsViewModel, onAdd: () -> Unit, onEdit: (Editing) -
                 }
             }
         }
+        item("hours-head") { Heading("Blocked hours") }
+        item("hours") { HoursCard(vm, onAdd = onAddHours, onTimes = onTimes) }
         item("rules") {
             Text(
                 if (on) {
                     "Making a limit stricter starts now. Loosening one (more time, a way out back on, or taking an app off) " +
-                        "starts tomorrow, after a ${LimitRules.LOOSEN_WAIT} minute wait and typing a sentence."
+                        "starts tomorrow, after a ${LimitRules.LOOSEN_WAIT} minute wait and typing a sentence. " +
+                        "Blocked hours work the same way, and have no way out."
                 } else {
                     "App limits is off, so changes start now."
                 },
@@ -348,6 +410,130 @@ private fun ListPage(vm: LimitsViewModel, onAdd: () -> Unit, onEdit: (Editing) -
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
             )
         }
+    }
+}
+
+@Composable
+private fun HoursCard(vm: LimitsViewModel, onAdd: () -> Unit, onTimes: () -> Unit) {
+    val hours by vm.hours.collectAsStateWithLifecycle()
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val brand = LocalBrand.current
+    Card {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("${HoursRules.clock(hours.start)} to ${HoursRules.clock(hours.end)}", style = MaterialTheme.typography.titleLarge)
+                Text("Every day", style = MaterialTheme.typography.bodySmall, color = muted)
+            }
+            TextButton(onClick = onTimes) { Text("Change", color = brand.action) }
+        }
+        if (hours.apps.isEmpty()) {
+            Text(
+                "Apps you add here stay closed in these hours every day, whatever time they have left. There's no way out.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = muted,
+            )
+        }
+        hours.apps.forEach { a ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                AppIcon(vm, a.pkg, a.label, 32.dp)
+                Spacer(Modifier.width(12.dp))
+                Text(a.label, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                if (hours.next?.remove?.contains(a.pkg) != true) {
+                    IconButton(onClick = { vm.removeHoursApp(a) }) { Icon(Icons.Rounded.Close, contentDescription = "Take ${a.label} off", tint = muted) }
+                }
+            }
+        }
+        hoursWaitingLine(hours)?.let { w ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(w, style = MaterialTheme.typography.bodySmall, color = brand.careful, modifier = Modifier.weight(1f))
+                TextButton(onClick = { vm.cancelHoursChange() }) { Text("Cancel it", color = brand.action) }
+            }
+        }
+        QuietButton("Add an app", onClick = onAdd, modifier = Modifier.fillMaxWidth())
+    }
+}
+
+@Composable
+private fun AddHoursDialog(vm: LimitsViewModel, e: Editing, onDismiss: () -> Unit) {
+    val hours by vm.hours.collectAsStateWithLifecycle()
+    val brand = LocalBrand.current
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                AppIcon(vm, e.pkg, e.label, 36.dp)
+                Spacer(Modifier.width(12.dp))
+                Text(e.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        },
+        text = {
+            Text(
+                "Closed from ${HoursRules.clock(hours.start)} to ${HoursRules.clock(hours.end)} every day, starting now, with no way out. " +
+                    "Taking it off later starts tomorrow, after a ${LimitRules.LOOSEN_WAIT} minute wait and typing a sentence.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = muted,
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                vm.addHoursApp(e.pkg, e.label)
+                onDismiss()
+            }) { Text("Add", color = brand.action) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = muted) } },
+    )
+}
+
+@Composable
+private fun HoursTimesDialog(vm: LimitsViewModel, onDismiss: () -> Unit) {
+    val hours by vm.hours.collectAsStateWithLifecycle()
+    val on by vm.on.collectAsStateWithLifecycle()
+    var start by remember { mutableIntStateOf(hours.start) }
+    var end by remember { mutableIntStateOf(hours.end) }
+    val brand = LocalBrand.current
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val loosening = on && hours.apps.isNotEmpty() && start != end && HoursRules.timesLoosen(hours.start, hours.end, start, end)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        title = { Text("Blocked hours") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                TimeRow("From", start, onLess = { start = HoursRules.step(start, -1) }, onMore = { start = HoursRules.step(start, 1) })
+                TimeRow("To", end, onLess = { end = HoursRules.step(end, -1) }, onMore = { end = HoursRules.step(end, 1) })
+                if (start == end) {
+                    Text("Pick a different start and end.", style = MaterialTheme.typography.bodySmall, color = brand.broke)
+                } else if (loosening) {
+                    Text(
+                        "This frees up time, so it starts tomorrow, after a ${LimitRules.LOOSEN_WAIT} minute wait and typing a sentence. " +
+                            "Hours that run past midnight finish first.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = brand.careful,
+                    )
+                } else {
+                    Text("More blocked time starts now.", style = MaterialTheme.typography.bodySmall, color = muted)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                vm.setHoursTimes(start, end)
+                onDismiss()
+            }, enabled = start != end) { Text(if (loosening) "Continue" else "Save", color = brand.action) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = muted) } },
+    )
+}
+
+@Composable
+private fun TimeRow(label: String, minute: Int, onLess: () -> Unit, onMore: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+        IconButton(onClick = onLess) { Icon(Icons.Rounded.Remove, contentDescription = "Earlier") }
+        Text(HoursRules.clock(minute), style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center, modifier = Modifier.width(96.dp))
+        IconButton(onClick = onMore) { Icon(Icons.Rounded.Add, contentDescription = "Later") }
     }
 }
 
@@ -437,9 +623,8 @@ private fun adminIntent(context: Context): Intent =
 // Picking an app
 
 @Composable
-private fun AppPicker(vm: LimitsViewModel, onPick: (PhoneApp) -> Unit, onDismiss: () -> Unit) {
+private fun AppPicker(vm: LimitsViewModel, exclude: Set<String>, onPick: (PhoneApp) -> Unit, onDismiss: () -> Unit) {
     val apps by vm.apps.collectAsStateWithLifecycle()
-    val list by vm.limits.collectAsStateWithLifecycle()
     val time by vm.time.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -457,8 +642,7 @@ private fun AppPicker(vm: LimitsViewModel, onPick: (PhoneApp) -> Unit, onDismiss
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 )
-                val limited = list.map { it.pkg }.toSet()
-                val shown = apps.orEmpty().filter { it.pkg !in limited && (query.isBlank() || it.label.contains(query.trim(), ignoreCase = true)) }
+                val shown = apps.orEmpty().filter { it.pkg !in exclude && (query.isBlank() || it.label.contains(query.trim(), ignoreCase = true)) }
                 if (apps == null) {
                     Text("Loading your apps...", color = muted, modifier = Modifier.padding(20.dp))
                 }
@@ -629,7 +813,7 @@ private fun HoldScreen(vm: LimitsViewModel, hold: Hold) {
                 Text(
                     when (hold) {
                         is Hold.TurnOff -> "Then App limits turns off, and its permissions can be removed."
-                        else -> "Then you'll type a sentence, and the change starts tomorrow."
+                        else -> "Then you'll type a sentence, and the change starts ${hold.starts}."
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = muted,
@@ -655,7 +839,11 @@ private fun HoldScreen(vm: LimitsViewModel, hold: Hold) {
                     modifier = Modifier.fillMaxWidth(),
                 )
                 ActionButton(
-                    if (hold is Hold.Limit && hold.remove) "Take it off tomorrow" else "Start it tomorrow",
+                    when {
+                        hold is Hold.Limit && hold.remove -> "Take it off tomorrow"
+                        hold is Hold.Hours && hold.app != null -> "Take it off tomorrow"
+                        else -> "Start it tomorrow"
+                    },
                     onClick = { vm.finishHold() },
                     enabled = LimitRules.promised(typed),
                     modifier = Modifier.fillMaxWidth(),

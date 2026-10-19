@@ -45,6 +45,7 @@ Each part of the app is an agent that does a job in the background and asks you 
 
 ### App limits
 - A daily limit for any app, with a suggestion based on your usual week.
+- Blocked hours: apps on the list stay closed at a fixed time every day (say midnight to 7am), with no way out.
 - Making limits stricter is instant. Loosening anything only starts the next day, after a wait and typing a sentence word for word. Turning it off is a 30 minute wait.
 - A **way out** on the block screen: wait for 10 more minutes, and the wait doubles each time that day.
 - A small service reads the phone's own record of which app is open (Usage access) about once a second while the screen is on, and puts the block screen over an app once its time is used. Device admin stops it being uninstalled.
@@ -118,7 +119,7 @@ Release builds are signed with a key from the environment when one is given (`SI
 
 ## Tests
 
-140 unit tests cover the parts with the most logic: bank message parsing, money in and transfer matching, category guessing, CSV import and backups, trip finding and fares, the day timeline, screen time maths and limit rules, email prompts and actions, and the vault's encryption and import.
+149 unit tests cover the parts with the most logic: bank message parsing, money in and transfer matching, category guessing, CSV import and backups, trip finding and fares, the day timeline, screen time maths, limit rules and blocked hours, email prompts and actions, and the vault's encryption and import.
 
 During development, the app also ran on an Android emulator in CI, which tapped through it with made-up data and saved the screenshots above.
 

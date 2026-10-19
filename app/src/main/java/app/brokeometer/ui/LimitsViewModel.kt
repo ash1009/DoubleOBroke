@@ -7,6 +7,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.brokeometer.BrokeApp
 import app.brokeometer.limits.AppLimit
+import app.brokeometer.limits.HoursApp
+import app.brokeometer.limits.HoursRules
 import app.brokeometer.limits.LimitRules
 import app.brokeometer.limits.LimitAdmin
 import app.brokeometer.limits.LimitLive
@@ -20,6 +22,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.ZoneId
 
 /** Today's screen time: per app, in total, and each app's usual day. */
 data class ScreenTime(
@@ -48,11 +53,20 @@ sealed interface Hold {
     val waitMinutes: Int
     val promise: Boolean
     val what: String
+    /** When the change starts, once the wait and the sentence are done. */
+    val starts: String get() = "tomorrow"
 
     data class Limit(val pkg: String, val label: String, val minutes: Int, val wayOut: Boolean, val remove: Boolean) : Hold {
         override val waitMinutes = LimitRules.LOOSEN_WAIT
         override val promise = true
         override val what = if (remove) "Taking $label off your limits" else "Loosening $label's limit"
+    }
+
+    /** Shorter blocked hours ([start] to [end]), or an app ([app]) coming off them. */
+    data class Hours(val start: Int?, val end: Int?, val app: HoursApp?, override val starts: String) : Hold {
+        override val waitMinutes = LimitRules.LOOSEN_WAIT
+        override val promise = true
+        override val what = if (app != null) "Taking ${app.label} off blocked hours" else "Shortening blocked hours"
     }
 
     data object TurnOff : Hold {
@@ -69,6 +83,7 @@ class LimitsViewModel(application: Application) : AndroidViewModel(application) 
     private val usage = app.container.usage
 
     val limits = store.limits
+    val hours = store.hours
     val on = store.on
     val day = store.day
 
@@ -191,6 +206,55 @@ class LimitsViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /** Adds an app to blocked hours: straight away. */
+    fun addHoursApp(pkg: String, label: String) {
+        if (pkg == getApplication<Application>().packageName) return
+        store.setHours(HoursRules.add(store.hours.value, listOf(HoursApp(pkg, label))))
+        val h = store.hours.value
+        _done.value = "$label is closed from ${HoursRules.clock(h.start)} to ${HoursRules.clock(h.end)}, from now."
+        LimitWatcher.sync(getApplication())
+    }
+
+    /** New blocked hours. More blocked time (or App limits off, or no apps yet) happens now; less waits. */
+    fun setHoursTimes(start: Int, end: Int) {
+        if (start == end) return
+        val h = store.hours.value
+        if (h.start == start && h.end == end) {
+            _done.value = "Saved."
+            return
+        }
+        if (on.value && h.apps.isNotEmpty() && HoursRules.timesLoosen(h.start, h.end, start, end)) {
+            _hold.value = Hold.Hours(start, end, null, startsText())
+            return
+        }
+        store.setHours(HoursRules.widen(h, start, end))
+        _done.value = "Blocked hours: ${HoursRules.clock(start)} to ${HoursRules.clock(end)}, from now."
+    }
+
+    /** Takes an app off blocked hours: with App limits on, after the wait and the sentence, and not before tomorrow. */
+    fun removeHoursApp(app: HoursApp) {
+        if (on.value) {
+            _hold.value = Hold.Hours(null, null, app, startsText())
+            return
+        }
+        val h = store.hours.value
+        store.setHours(h.copy(apps = h.apps.filterNot { it.pkg == app.pkg }))
+        _done.value = "${app.label} is off blocked hours."
+        LimitWatcher.sync(getApplication())
+    }
+
+    /** Drops a waiting change to blocked hours: stricter again, so straight away. */
+    fun cancelHoursChange() {
+        store.setHours(store.hours.value.copy(next = null))
+        _done.value = "Change cancelled."
+    }
+
+    private fun changeFrom(): Long = HoursRules.changeFrom(store.hours.value, LocalDateTime.now(), ZoneId.systemDefault())
+
+    private fun startsText(): String = HoursRules.whenText(changeFrom(), ZoneId.systemDefault(), LocalDate.now()).let {
+        if (it.endsWith("at 00:00")) it.removeSuffix(" at 00:00") else "$it, after blocked hours"
+    }
+
     fun cancelChange(pkg: String) {
         store.cancelChange(pkg)
         _done.value = "Change cancelled."
@@ -232,6 +296,12 @@ class LimitsViewModel(application: Application) : AndroidViewModel(application) 
             is Hold.Limit -> {
                 store.setFromTomorrow(h.pkg, h.minutes, h.wayOut, h.remove)
                 _done.value = if (h.remove) "${h.label} comes off your limits tomorrow." else "From tomorrow, ${h.label} gets ${LimitRules.hmMinutes(h.minutes)} a day."
+            }
+            is Hold.Hours -> {
+                val from = changeFrom()
+                store.setHours(HoursRules.loosen(store.hours.value, from, h.start, h.end, setOfNotNull(h.app?.pkg)))
+                val at = HoursRules.whenText(store.hours.value.next?.from ?: from, ZoneId.systemDefault(), LocalDate.now())
+                _done.value = if (h.app != null) "${h.app.label} comes off blocked hours $at." else "New blocked hours start $at."
             }
             Hold.TurnOff -> {
                 store.setOn(false)

@@ -8,8 +8,8 @@ import org.json.JSONObject
 import java.time.LocalDate
 
 /**
- * What App limits keeps: the apps and their limits, whether it's on, and today's way outs and
- * warnings. Changes that loosen a limit wait for the next day ([Change]); [refresh] lets them take
+ * What App limits keeps: the apps and their limits, blocked hours, whether it's on, and today's way
+ * outs and warnings. Changes that loosen a limit wait for the next day ([Change]); [refresh] lets them take
  * over once their day comes.
  */
 class LimitStore(context: Context) {
@@ -19,6 +19,10 @@ class LimitStore(context: Context) {
     private val _limits = MutableStateFlow(readLimits())
     /** Every app on the list, as saved (with any change still waiting). */
     val limits: StateFlow<List<AppLimit>> = _limits
+
+    private val _hours = MutableStateFlow(readHours())
+    /** Blocked hours, as saved (with any change still waiting). */
+    val hours: StateFlow<BlockedHours> = _hours
 
     private val _on = MutableStateFlow(sp.getBoolean(KEY_ON, true))
     /** Whether App limits is on. Turning it off takes [LimitRules.TURN_OFF_WAIT] minutes. */
@@ -38,11 +42,23 @@ class LimitStore(context: Context) {
     fun refresh(today: LocalDate = LocalDate.now()) {
         val now = _limits.value.mapNotNull { LimitRules.onDay(it, today) }
         if (now != _limits.value) saveLimits(now)
+        val h = HoursRules.at(_hours.value, System.currentTimeMillis())
+        if (h != _hours.value) saveHours(h)
         if (_day.value.day != today.toString()) saveDay(DayState(today.toString()))
     }
 
     /** An app's limit as it stands today, or null when it has none. */
     fun limitFor(pkg: String): AppLimit? = _limits.value.firstOrNull { it.pkg == pkg }
+
+    /** Whether [pkg] is closed right now by blocked hours. */
+    fun closedNow(pkg: String): Boolean =
+        HoursRules.closed(HoursRules.at(_hours.value, System.currentTimeMillis()), pkg, java.time.LocalTime.now())
+
+    /** Saves blocked hours as they are given: the rules of what waits are in [HoursRules]. */
+    @Synchronized
+    fun setHours(h: BlockedHours) {
+        saveHours(h)
+    }
 
     /** Adds an app or makes its limit stricter: straight away. Any loosening change waiting for it is dropped. */
     @Synchronized
@@ -143,6 +159,43 @@ class LimitStore(context: Context) {
         }
     }.getOrDefault(emptyList())
 
+    private fun saveHours(h: BlockedHours) {
+        val o = JSONObject()
+            .put("start", h.start)
+            .put("end", h.end)
+            .put("apps", JSONArray().apply { h.apps.forEach { a -> put(JSONObject().put("pkg", a.pkg).put("label", a.label)) } })
+        h.next?.let { c ->
+            o.put(
+                "next",
+                JSONObject().put("from", c.from).put("remove", JSONArray(c.remove.toList())).apply {
+                    c.start?.let { put("start", it) }
+                    c.end?.let { put("end", it) }
+                },
+            )
+        }
+        sp.edit().putString(KEY_HOURS, o.toString()).apply()
+        _hours.value = h
+    }
+
+    private fun readHours(): BlockedHours = runCatching {
+        val o = JSONObject(sp.getString(KEY_HOURS, null)!!)
+        val arr = o.optJSONArray("apps") ?: JSONArray()
+        BlockedHours(
+            start = o.getInt("start"),
+            end = o.getInt("end"),
+            apps = (0 until arr.length()).map { i -> arr.getJSONObject(i).let { HoursApp(it.getString("pkg"), it.getString("label")) } },
+            next = o.optJSONObject("next")?.let { n ->
+                val rm = n.optJSONArray("remove") ?: JSONArray()
+                HoursChange(
+                    from = n.getLong("from"),
+                    start = if (n.has("start")) n.getInt("start") else null,
+                    end = if (n.has("end")) n.getInt("end") else null,
+                    remove = (0 until rm.length()).map { rm.getString(it) }.toSet(),
+                )
+            },
+        )
+    }.getOrDefault(BlockedHours())
+
     private fun saveDay(d: DayState) {
         val o = JSONObject()
             .put("day", d.day)
@@ -167,6 +220,7 @@ class LimitStore(context: Context) {
         private const val KEY_LIMITS = "limits"
         private const val KEY_ON = "on"
         private const val KEY_DAY = "day"
+        private const val KEY_HOURS = "hours"
     }
 }
 

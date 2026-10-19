@@ -49,8 +49,9 @@ import app.brokeometer.ui.theme.LocalBrand
 import kotlinx.coroutines.delay
 
 /**
- * The block screen, over an app whose time is used up for today. It can offer a way out (wait, and
- * the wait doubles each time, for 10 more minutes). Leaving the screen during a wait starts it again.
+ * The block screen, over an app whose time is used up for today, or that is in blocked hours. For a
+ * used-up limit it can offer a way out (wait, and the wait doubles each time, for 10 more minutes).
+ * Leaving the screen during a wait starts it again. Blocked hours have no way out.
  */
 class BlockActivity : ComponentActivity() {
 
@@ -110,7 +111,8 @@ class BlockActivity : ComponentActivity() {
         val limits by store.limits.collectAsStateWithLifecycle()
         val day by store.day.collectAsStateWithLifecycle()
         val limit = limits.firstOrNull { it.pkg == pkg }
-        val label = limit?.label ?: container.usage.label(pkg)
+        val hours by store.hours.collectAsStateWithLifecycle()
+        val label = limit?.label ?: hours.apps.firstOrNull { it.pkg == pkg }?.label ?: container.usage.label(pkg)
         val icon = remember(pkg) { container.usage.icon(pkg)?.asImageBitmap() }
         val brand = LocalBrand.current
         val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -174,6 +176,8 @@ class BlockActivity : ComponentActivity() {
                 val (title, body) = when (reason) {
                     REASON_CLOCK -> "The phone's clock was changed" to
                         "Turn Automatic date and time back on to use $label. App limits goes by the real time."
+                    REASON_HOURS -> "$label is closed right now" to
+                        "Blocked hours: ${HoursRules.clock(hours.start)} to ${HoursRules.clock(hours.end)}. It opens again at ${HoursRules.clock(hours.end)}."
                     else -> "$label is done for today" to
                         "You've had your ${LimitRules.hmMinutes((limit?.minutes ?: 0) + (day.extra[pkg] ?: 0))}. It opens again at midnight."
                 }
@@ -187,7 +191,8 @@ class BlockActivity : ComponentActivity() {
                         finish()
                     }, modifier = Modifier.fillMaxWidth())
                     Spacer(Modifier.height(12.dp))
-                } else {
+                } else if (reason == REASON_LIMIT) {
+                    // Blocked hours have no way out.
                     if (limit?.wayOut == true) {
                         QuietButton(
                             "Wait $waitMinutes min for 10 more minutes",
@@ -210,5 +215,6 @@ class BlockActivity : ComponentActivity() {
         const val EXTRA_REASON = "reason"
         const val REASON_LIMIT = "limit"
         const val REASON_CLOCK = "clock"
+        const val REASON_HOURS = "hours"
     }
 }

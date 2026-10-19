@@ -189,12 +189,19 @@ class LimitWatcher : Service() {
     private fun check(now: Long) {
         if (!store.on.value) return
         val pkg = front ?: return
-        // No limit for this app (or it's this one, or the block screen): nothing to count.
-        val limit = store.limitFor(pkg) ?: return
+        // No limit or blocked hours for this app (or it's this one, or the block screen): nothing to do.
+        val limit = store.limitFor(pkg)
+        val inHours = store.hours.value.apps.any { it.pkg == pkg }
+        if (limit == null && !inHours) return
         if (!autoTime(this)) {
             block(pkg, BlockActivity.REASON_CLOCK, now)
             return
         }
+        if (inHours && store.closedNow(pkg)) {
+            block(pkg, BlockActivity.REASON_HOURS, now)
+            return
+        }
+        if (limit == null) return
         val left = LimitRules.allowedMs(limit, store.extraMinutes(pkg)) - usedNow(pkg, now)
         val warnMs = limit.warnMinutes * 60_000L
         if (limit.warnMinutes > 0 && left in 1..warnMs && !store.warned(pkg)) {
@@ -224,11 +231,12 @@ class LimitWatcher : Service() {
     /** Without "Display over other apps" Android may keep the block screen back: a notification instead. */
     private fun blockedNote(pkg: String, i: Intent) {
         if (!NotificationManagerCompat.from(this).areNotificationsEnabled()) return
-        val label = store.limitFor(pkg)?.label ?: usage.label(pkg)
+        val label = store.limitFor(pkg)?.label ?: store.hours.value.apps.firstOrNull { it.pkg == pkg }?.label ?: usage.label(pkg)
         val open = PendingIntent.getActivity(this, 72, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val hours = i.getStringExtra(BlockActivity.EXTRA_REASON) == BlockActivity.REASON_HOURS
         val n = NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_timer)
-            .setContentTitle("$label is done for today")
+            .setContentTitle(if (hours) "$label is closed in blocked hours" else "$label is done for today")
             .setContentText("Allow Display over other apps in App limits, Setup, so it closes by itself.")
             .setContentIntent(open)
             .setAutoCancel(true)
@@ -291,11 +299,11 @@ class LimitWatcher : Service() {
             }
         }
 
-        /** On, with an app on the list and Usage access given. */
+        /** On, with an app on the list (or in blocked hours) and Usage access given. */
         fun shouldRun(context: Context): Boolean {
             val app = context.applicationContext as BrokeApp
             val store = app.container.limits
-            return store.on.value && store.limits.value.isNotEmpty() && app.container.usage.allowed()
+            return store.on.value && (store.limits.value.isNotEmpty() || store.hours.value.apps.isNotEmpty()) && app.container.usage.allowed()
         }
 
         /** Starts or stops the watcher, as App limits' settings say. */
