@@ -188,6 +188,8 @@ class MainActivity : FragmentActivity() {
         const val ROUTE_INSIGHTS = Routes.INSIGHTS
         const val ROUTE_EMAIL = Routes.EMAIL
         const val ROUTE_MONEY_IN = Routes.MONEY_IN
+        /** One email in the app, from a notification. */
+        fun emailRoute(logId: Long): String = "email/view/$logId"
         /** Coming back within half a minute (a file picker, a quick switch) does not ask again. */
         private const val RELOCK_AFTER_MS = 30_000L
     }

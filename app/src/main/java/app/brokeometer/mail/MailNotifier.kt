@@ -73,14 +73,14 @@ class MailNotifier(private val context: Context) {
 
     /**
      * An email the app couldn't check yet (the mailbox couldn't be reached, or doesn't have it yet), told
-     * from the email app's own notification, which was cleared. Tapping opens that email app.
+     * from the email app's own notification, which was cleared. Tapping opens Email in this app.
      */
     fun unchecked(alert: AppAlert) {
         if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
         val subject = alert.text.trim().lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
-        val launch = context.packageManager.getLaunchIntentForPackage(alert.packageName)
-            ?: Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_ROUTE, MainActivity.ROUTE_EMAIL)
-        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val launch = Intent(context, MainActivity::class.java)
+            .putExtra(MainActivity.EXTRA_ROUTE, MainActivity.ROUTE_EMAIL)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         val open = PendingIntent.getActivity(context, alert.key.hashCode(), launch, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val text = "New email" + if (subject.isNotEmpty()) ": $subject" else ""
         val builder = NotificationCompat.Builder(context, CHANNEL_MAIL)
@@ -143,20 +143,15 @@ class MailNotifier(private val context: Context) {
             .setShowWhen(true)
             .setAutoCancel(true)
             .setCategory(NotificationCompat.CATEGORY_EMAIL)
-            .setContentIntent(openMailApp(account, log.id))
+            .setContentIntent(openInApp(log.id))
             .setGroup("mail-${log.id}")
 
-    /** Tapping opens the email app the account belongs to, or the Email page if it is not on the phone. */
-    private fun openMailApp(account: MailAccountEntity, logId: Long): PendingIntent {
-        val pkg = when (account.provider) {
-            MailProviders.GMAIL -> GMAIL_PACKAGE
-            MailProviders.YAHOO -> YAHOO_PACKAGE
-            else -> null
-        }
-        val launch = pkg?.let { context.packageManager.getLaunchIntentForPackage(it) }
-            ?: Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_ROUTE, MainActivity.ROUTE_EMAIL)
-        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        return PendingIntent.getActivity(context, id(logId), launch, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    /** Tapping opens the email in this app. */
+    private fun openInApp(logId: Long): PendingIntent {
+        val open = Intent(context, MainActivity::class.java)
+            .putExtra(MainActivity.EXTRA_ROUTE, MainActivity.emailRoute(logId))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        return PendingIntent.getActivity(context, id(logId), open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     }
 
     private fun action(name: String, logId: Long): PendingIntent = PendingIntent.getBroadcast(

@@ -174,6 +174,8 @@ fun AppRoot(vm: AppViewModel, requestedRoute: String?, onRouteHandled: () -> Uni
     LaunchedEffect(requestedRoute) {
         if (requestedRoute != null) {
             if (requestedRoute in Routes.all) open(requestedRoute)
+            // One email, from an email notification: it opens over wherever you are.
+            if (Regex("email/view/-?\\d+").matches(requestedRoute)) nav.navigate(requestedRoute) { launchSingleTop = true }
             onRouteHandled()
         }
     }
