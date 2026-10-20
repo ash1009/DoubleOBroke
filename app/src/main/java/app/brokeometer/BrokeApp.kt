@@ -87,8 +87,9 @@ class AppContainer(app: BrokeApp) {
     val mailDatabase: MailDatabase = MailDatabase.create(app)
     val mail = MailAgent(app, mailDatabase.dao(), prefs, claude, gemini, app.scope)
     val mailNotifier = MailNotifier(app)
-    val inboxAgent = InboxAgent(app, mailDatabase.dao(), prefs, mail, mailNotifier, app.scope, repository)
-    val mailReader = MailReader(mailDatabase.dao(), prefs, mail)
+    val mailReader = MailReader(mailDatabase.dao(), prefs, mail, java.io.File(app.cacheDir, "mail"))
+    // An email you're told about is fetched straight away, so it opens at once from the notification.
+    val inboxAgent = InboxAgent(app, mailDatabase.dao(), prefs, mail, mailNotifier, app.scope, repository, onTold = { mailReader.prefetch(listOf(it)) })
     val starredMail = StarredMail(mailDatabase.dao(), prefs, mail)
     val news = NewsAgent(app, claude) { text, outcome -> repository.log(LogKinds.NEWS_SOURCE, "News", text, outcome) }
     val notesDatabase: NotesDatabase = NotesDatabase.create(app)

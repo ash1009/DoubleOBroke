@@ -40,6 +40,8 @@ class InboxAgent(
     private val notifier: MailNotifier,
     private val scope: CoroutineScope,
     private val repository: app.brokeometer.data.Repository,
+    /** An email you were just told about (its list entry), to fetch ahead so it opens at once. */
+    private val onTold: (Long) -> Unit = {},
     private val client: MailClient = MailClient(),
 ) {
     private val lock = Mutex()
@@ -355,7 +357,10 @@ class InboxAgent(
             } else {
                 val row = entry(null, MailActions.UNDECIDED, why)
                 val id = save(row)
-                if (tell) notifier.undecided(row.copy(id = id), account)
+                if (tell) {
+                    notifier.undecided(row.copy(id = id), account)
+                    onTold(id)
+                }
             }
         }
         // Sorted on a later try: a "couldn't sort" notification from before goes.
@@ -374,6 +379,7 @@ class InboxAgent(
             val row = entry(usual, MailActions.NOTIFIED, "Has a code, so you were told straight away.")
             val id = save(row)
             notifier.important(row.copy(id = id), account, code)
+            onTold(id)
             return true
         }
         if (item.fromAddress.isNotEmpty() && item.fromAddress.lowercase() in prefs.quietSenders.value) {
@@ -394,6 +400,7 @@ class InboxAgent(
                     val row = entry(null, MailActions.NOTIFIED, "${item.subject.take(80)}. You said this sender is important.")
                     val id = save(row)
                     notifier.important(row.copy(id = id), account)
+                    onTold(id)
                     true
                 } else {
                     // Left unread in the inbox, you're told, and it's tried again on later checks.
@@ -414,6 +421,7 @@ class InboxAgent(
                     val summary = decision.summary + why
                     val id = save(entry(category, MailActions.NOTIFIED, summary))
                     notifier.important(entry(category, MailActions.NOTIFIED, summary).copy(id = id), account)
+                    onTold(id)
                 } else {
                     val archived = runCatching { s.archive(item.uid) }.getOrDefault(false)
                     val read = archived || runCatching { s.markRead(MailFolders.INBOX, item.uid) }.isSuccess

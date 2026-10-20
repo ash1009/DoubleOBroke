@@ -2,6 +2,10 @@ package app.brokeometer.mail
 
 import app.brokeometer.data.Prefs
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
@@ -23,11 +27,17 @@ import javax.mail.internet.AddressException
 import javax.mail.internet.InternetAddress
 import javax.mail.internet.MimeMessage
 
-/** Opens whole emails for reading in the app, and sends replies and new emails with the account's app password. */
+/**
+ * Opens whole emails for reading in the app, and sends replies and new emails with the account's app password.
+ * Emails opened or fetched ahead are kept on the phone (in the app's cache), so they open at once next
+ * time, even after the app was closed. One connection per account is kept open for a minute after use,
+ * so opening one email after another doesn't sign in each time.
+ */
 class MailReader(
     private val dao: MailDao,
     private val prefs: Prefs,
     private val mail: MailAgent,
+    cacheDir: File? = null,
     private val client: MailClient = MailClient(),
 ) {
     sealed interface Opened {
@@ -43,9 +53,19 @@ class MailReader(
     private val prefetching = AtomicBoolean(false)
     @Volatile private var lastPrefetch = 0L
 
-    private fun cached(id: Long): FullEmail? = synchronized(cacheLock) { cache[id] }
+    private val disk = cacheDir?.let { MailDiskCache(it) }
+
+    /** An email kept in memory, or on the phone (slow: not on the main thread). */
+    private fun cached(id: Long): FullEmail? =
+        synchronized(cacheLock) { cache[id] } ?: disk?.read(id)?.also { remember(id, it) }
 
     private fun keep(id: Long, email: FullEmail) {
+        if (sizeOf(email) > MAX_ONE_CHARS) return
+        remember(id, email)
+        disk?.write(id, email)
+    }
+
+    private fun remember(id: Long, email: FullEmail) {
         val size = sizeOf(email)
         if (size > MAX_ONE_CHARS) return
         synchronized(cacheLock) {
@@ -64,17 +84,64 @@ class MailReader(
 
     private fun sizeOf(e: FullEmail): Long = (e.html?.length ?: 0).toLong() + (e.text?.length ?: 0)
 
+    /** The kept copy, if it is this email (an id could be used again after the list is trimmed). */
+    private fun cachedFor(log: MailLogEntity): FullEmail? =
+        cached(log.id)?.takeIf { it.messageId == null || log.messageId == null || it.messageId == log.messageId }
+
+    // One open connection per account, used by one thing at a time, closed after a minute unused.
+    private class Warm(val session: MailSession)
+    private val warm = java.util.concurrent.ConcurrentHashMap<Long, Warm>()
+    private val turns = java.util.concurrent.ConcurrentHashMap<Long, Mutex>()
+    private val closers = java.util.concurrent.ConcurrentHashMap<Long, Job>()
+
+    /**
+     * Runs [block] on the account's open connection, signing in only when there isn't one. A connection
+     * the server had closed is replaced and [block] tried once more.
+     */
+    private suspend fun <T> withSession(account: MailAccountEntity, block: (MailSession) -> T): T {
+        val turn = turns.getOrPut(account.id) { Mutex() }
+        return turn.withLock {
+            withContext(Dispatchers.IO) {
+                closers.remove(account.id)?.cancel()
+                val reused = warm[account.id]?.session?.takeIf { it.isOpen }
+                val result = try {
+                    block(reused ?: connect(account))
+                } catch (e: Exception) {
+                    if (reused == null || e is MailClient.MailError) throw e
+                    drop(account.id)
+                    block(connect(account))
+                }
+                closers[account.id] = background.launch {
+                    delay(KEEP_OPEN_MS)
+                    turn.withLock { drop(account.id) }
+                }
+                result
+            }
+        }
+    }
+
+    private fun connect(account: MailAccountEntity): MailSession {
+        drop(account.id)
+        val s = client.session(mail.server(account), account.address, prefs.mailPassword(account.address), account.provider)
+        warm[account.id] = Warm(s)
+        return s
+    }
+
+    private fun drop(accountId: Long) {
+        warm.remove(accountId)?.let { runCatching { it.session.close() } }
+    }
+
     suspend fun open(log: MailLogEntity): Opened {
-        cached(log.id)?.let { return Opened.Email(it) }
+        synchronized(cacheLock) { cache[log.id] }?.takeIf { it.messageId == null || log.messageId == null || it.messageId == log.messageId }
+            ?.let { return Opened.Email(it) }
         return withContext(Dispatchers.IO) {
+            cachedFor(log)?.let { return@withContext Opened.Email(it) }
             val account = dao.account(log.accountId) ?: return@withContext Opened.Problem("This account isn't in the app any more.")
             try {
-                client.session(mail.server(account), account.address, prefs.mailPassword(account.address), account.provider).use { s ->
-                    s.full(log.messageId, log.uid, log.folder)?.let {
-                        keep(log.id, it)
-                        Opened.Email(it)
-                    } ?: Opened.Problem("This email isn't in the mailbox any more. It may have been deleted.")
-                }
+                withSession(account) { s -> s.full(log.messageId, log.uid, log.folder) }?.let {
+                    keep(log.id, it)
+                    Opened.Email(it)
+                } ?: Opened.Problem("This email isn't in the mailbox any more. It may have been deleted.")
             } catch (e: MailClient.MailError) {
                 Opened.Problem(e.message ?: "Couldn't reach the mailbox.")
             } catch (e: Exception) {
@@ -109,17 +176,24 @@ class MailReader(
         background.launch { prefetch(dao.logs(ids)) }
     }
 
+    // One email at a time, so an email you open goes ahead of the rest of these.
     private suspend fun prefetch(logs: List<MailLogEntity>) {
-        val wanted = logs.filter { cached(it.id) == null }
+        val wanted = logs.filter { cachedFor(it) == null }
         for ((accountId, list) in wanted.groupBy { it.accountId }) {
             val account = dao.account(accountId) ?: continue
-            runCatching {
-                client.session(mail.server(account), account.address, prefs.mailPassword(account.address), account.provider).use { s ->
-                    for (log in list) {
-                        if (cached(log.id) != null) continue
-                        runCatching { s.full(log.messageId, log.uid, log.folder) }.getOrNull()?.let { keep(log.id, it) }
-                    }
+            for (log in list) {
+                if (cachedFor(log) != null) continue
+                val email = try {
+                    withSession(account) { s -> s.full(log.messageId, log.uid, log.folder) }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: MailClient.MailError) {
+                    // Can't sign in or reach it now: the rest of this account waits for next time.
+                    break
+                } catch (e: Exception) {
+                    null
                 }
+                email?.let { keep(log.id, it) }
             }
         }
     }
@@ -130,9 +204,7 @@ class MailReader(
     suspend fun attachment(log: MailLogEntity, index: Int, dir: File): Saved? = withContext(Dispatchers.IO) {
         val account = dao.account(log.accountId) ?: return@withContext null
         try {
-            val found = client.session(mail.server(account), account.address, prefs.mailPassword(account.address), account.provider).use { s ->
-                s.attachment(log.messageId, log.uid, log.folder, index)
-            } ?: return@withContext null
+            val found = withSession(account) { s -> s.attachment(log.messageId, log.uid, log.folder, index) } ?: return@withContext null
             dir.mkdirs()
             // Files opened before are cleared out after a day.
             dir.listFiles()?.filter { System.currentTimeMillis() - it.lastModified() > 86_400_000L }?.forEach { it.delete() }
@@ -246,7 +318,9 @@ class MailReader(
         private const val MAX_EMAILS = 40
         private const val MAX_CHARS = 8_000_000L
         private const val MAX_ONE_CHARS = 3_000_000L
-        private const val PREFETCH_COUNT = 12
+        private const val PREFETCH_COUNT = 20
+        /** How long a connection stays open after it was last used. */
+        private const val KEEP_OPEN_MS = 60_000L
         private const val PREFETCH_EVERY_MS = 5 * 60_000L
 
         /** "On Sun, 11 Oct 2026 at 07:42, Priya <priya@x.com> wrote:" and the email, each line starting with ">". */

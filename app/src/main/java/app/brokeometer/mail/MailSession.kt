@@ -405,18 +405,69 @@ class MailSession(private val store: IMAPStore, private val provider: String, pr
      * Finds an email by its Message-ID (or, with none, by UID in [kind]) wherever it is now: the inbox,
      * the archive, spam or the bin. Reading it does not mark it read.
      */
-    fun full(messageId: String?, uid: Long, kind: String): FullEmail? {
+    fun full(messageId: String?, uid: Long, kind: String): FullEmail? = find(messageId, uid, kind) { read(it) }
+
+    /** One attached file of an email (the [index]th, as listed in [FullEmail.attachments]): its name, type and bytes. */
+    fun attachment(messageId: String?, uid: Long, kind: String, index: Int): Triple<String, String, ByteArray>? =
+        find(messageId, uid, kind) { m ->
+            val parts = MailParts()
+            parts.collect(m)
+            val part = parts.attachmentParts.getOrNull(index) ?: return@find null
+            val name = parts.attachments[index]
+            val type = runCatching { part.contentType.substringBefore(';').trim().lowercase(Locale.ROOT) }.getOrDefault("application/octet-stream")
+            val bytes = part.inputStream.use { it.readBytes() }
+            Triple(name, type, bytes)
+        }
+
+    /**
+     * Finds an email the quick way first: by its UID where it came in, if it's still there; then, in Gmail,
+     * by its Message-ID through Gmail's own search, which answers at once. Searching every folder's headers
+     * (slow on a big mailbox) is the last resort, for other mailboxes or if Gmail's search doesn't answer.
+     */
+    private fun <T> find(messageId: String?, uid: Long, kind: String, use: (MimeMessage) -> T?): T? {
+        val home = folder(kind)
+        if (home != null && uid > 0) {
+            home.open(Folder.READ_ONLY)
+            try {
+                val m = home.getMessageByUID(uid) as? MimeMessage
+                if (m != null && (messageId == null || m.messageID == messageId)) return use(m)
+            } finally {
+                runCatching { home.close(false) }
+            }
+        }
+        if (messageId != null && provider == MailProviders.GMAIL) {
+            val id = messageId.trim().removePrefix("<").removeSuffix(">")
+            var answered = true
+            for (f in listOfNotNull(allMail(), spam(), trash()).distinctBy { it.fullName }) {
+                f.open(Folder.READ_ONLY)
+                try {
+                    val uids = try {
+                        gmailSearch(f, "rfc822msgid:$id")
+                    } catch (e: MessagingException) {
+                        answered = false
+                        continue
+                    }
+                    for (u in uids) {
+                        val m = f.getMessageByUID(u) as? MimeMessage ?: continue
+                        return use(m)
+                    }
+                } finally {
+                    runCatching { f.close(false) }
+                }
+            }
+            // Gmail's search answered everywhere and it isn't there: it's gone.
+            if (answered) return null
+        }
         val places = if (kind == MailFolders.SPAM) listOfNotNull(spam(), inbox(), trash(), archive()) else listOfNotNull(inbox(), archive(), spam(), trash())
-        val home = folder(kind)?.fullName
         for (f in places.distinctBy { it.fullName }) {
             f.open(Folder.READ_ONLY)
             try {
                 val m: Message = when {
                     messageId != null -> f.search(HeaderTerm("Message-ID", messageId)).firstOrNull()
-                    f.fullName == home -> f.getMessageByUID(uid)
+                    f.fullName == home?.fullName -> f.getMessageByUID(uid)
                     else -> null
                 } ?: continue
-                return read(m as MimeMessage)
+                return use(m as MimeMessage)
             } finally {
                 runCatching { f.close(false) }
             }
@@ -424,31 +475,8 @@ class MailSession(private val store: IMAPStore, private val provider: String, pr
         return null
     }
 
-    /** One attached file of an email (the [index]th, as listed in [FullEmail.attachments]): its name, type and bytes. */
-    fun attachment(messageId: String?, uid: Long, kind: String, index: Int): Triple<String, String, ByteArray>? {
-        val home = folder(kind)?.fullName
-        val places = if (kind == MailFolders.SPAM) listOfNotNull(spam(), inbox(), trash(), archive()) else listOfNotNull(inbox(), archive(), spam(), trash())
-        for (f in places.distinctBy { it.fullName }) {
-            f.open(Folder.READ_ONLY)
-            try {
-                val m: Message = when {
-                    messageId != null -> f.search(HeaderTerm("Message-ID", messageId)).firstOrNull()
-                    f.fullName == home -> f.getMessageByUID(uid)
-                    else -> null
-                } ?: continue
-                val parts = MailParts()
-                parts.collect(m)
-                val part = parts.attachmentParts.getOrNull(index) ?: return null
-                val name = parts.attachments[index]
-                val type = runCatching { part.contentType.substringBefore(';').trim().lowercase(Locale.ROOT) }.getOrDefault("application/octet-stream")
-                val bytes = part.inputStream.use { it.readBytes() }
-                return Triple(name, type, bytes)
-            } finally {
-                runCatching { f.close(false) }
-            }
-        }
-        return null
-    }
+    /** Whether this session can still be used (the server hasn't closed it). */
+    val isOpen: Boolean get() = !closed.get() && runCatching { store.isConnected }.getOrDefault(false)
 
     private fun read(m: MimeMessage): FullEmail {
         val parts = MailParts()

@@ -87,10 +87,15 @@ class MessageViewModel(application: Application, state: SavedStateHandle) : Andr
         emails[id]?.let { fetch(id, it) }
     }
 
+    /** Done once the email you opened has loaded: the ones beside it wait for it, so it comes first. */
+    private val firstLoaded = kotlinx.coroutines.CompletableDeferred<Unit>()
+
     private fun fetch(id: Long, into: MutableStateFlow<MailReader.Opened?>) = viewModelScope.launch {
         into.value = null
+        if (id != this@MessageViewModel.id) firstLoaded.await()
         val log = log(id)
         into.value = if (log == null) MailReader.Opened.Problem("This email isn't on the list any more.") else reader.open(log)
+        if (id == this@MessageViewModel.id) firstLoaded.complete(Unit)
     }
 
     /**
@@ -99,7 +104,10 @@ class MessageViewModel(application: Application, state: SavedStateHandle) : Andr
      */
     fun prefetchAround(index: Int) {
         val further = listOfNotNull(ids.getOrNull(index + 2), ids.getOrNull(index - 2))
-        if (further.isNotEmpty()) reader.prefetch(further)
+        if (further.isNotEmpty()) viewModelScope.launch {
+            firstLoaded.await()
+            reader.prefetch(further)
+        }
     }
 
     /** Fetches one attached file into the app's cache, to open with another app. Null if it couldn't. */
