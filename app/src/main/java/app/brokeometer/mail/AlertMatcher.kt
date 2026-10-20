@@ -14,7 +14,8 @@ data class AppAlert(
 
 /**
  * Works out which email-app notifications belong to emails the agent has dealt with, so they can be
- * cleared, and leaves alone any for emails it could not decide on. Kept apart from Android so it can be tested.
+ * cleared. One the AI couldn't decide on counts too: the app tells you about it with its own notification.
+ * Kept apart from Android so it can be tested.
  */
 object AlertMatcher {
 
@@ -25,21 +26,18 @@ object AlertMatcher {
         val logIds: List<Long>,
     )
 
-    private val handledActions = setOf(MailActions.NOTIFIED, MailActions.ARCHIVED, MailActions.READ_ELSEWHERE, MailActions.MARKED_READ, MailActions.DELETED)
+    private val handledActions = setOf(
+        MailActions.NOTIFIED, MailActions.ARCHIVED, MailActions.READ_ELSEWHERE, MailActions.MARKED_READ, MailActions.DELETED,
+        MailActions.UNDECIDED,
+    )
 
     fun match(alerts: List<AppAlert>, entries: List<MailLogEntity>, accounts: Map<Long, String>): Result {
         val clear = ArrayList<String>()
         val ids = LinkedHashSet<Long>()
         val leftByPackage = HashMap<String, Int>()
         for (alert in alerts.filter { !it.summary }) {
-            val forAccount = alert.account?.lowercase()?.let { a -> entries.filter { accounts[it.accountId]?.let { addr -> a.contains(addr) } == true } }
-            val candidates = forAccount?.takeIf { it.isNotEmpty() } ?: entries
-            val title = norm(alert.title)
-            val blob = norm(alert.title + " " + alert.text)
-            val matched = candidates.filter { e -> matches(e, title, blob) }
-            val keep = matched.any { it.action == MailActions.UNDECIDED && !it.undone }
-            val done = matched.filter { it.action in handledActions }
-            if (!keep && done.isNotEmpty()) {
+            val done = entriesFor(alert, entries, accounts).filter { it.action in handledActions }
+            if (done.isNotEmpty()) {
                 clear += alert.key
                 done.forEach { ids += it.id }
             } else {
@@ -51,6 +49,15 @@ object AlertMatcher {
         alerts.filter { it.summary && it.packageName in touched && (leftByPackage[it.packageName] ?: 0) == 0 }
             .forEach { clear += it.key }
         return Result(clear, ids.toList())
+    }
+
+    /** The entries that are the email behind [alert]: its account's (when it shows one), by subject or sender. */
+    fun entriesFor(alert: AppAlert, entries: List<MailLogEntity>, accounts: Map<Long, String>): List<MailLogEntity> {
+        val forAccount = alert.account?.lowercase()?.let { a -> entries.filter { accounts[it.accountId]?.lowercase()?.let { addr -> a.contains(addr) } == true } }
+        val candidates = forAccount?.takeIf { it.isNotEmpty() } ?: entries
+        val title = norm(alert.title)
+        val blob = norm(alert.title + " " + alert.text)
+        return candidates.filter { e -> matches(e, title, blob) }
     }
 
     private fun matches(e: MailLogEntity, title: String, blob: String): Boolean {

@@ -54,8 +54,8 @@ class PaymentListenerService : NotificationListenerService() {
         val extras = notification.extras ?: return
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()
 
-        // A new email in an email app: the agent reads it, and clears this notification once it has
-        // dealt with the email, so only the agent's own notification (if any) is left.
+        // A new email in an email app: the agent takes over. This notification is cleared straight away
+        // and the app's own notification (if the email needs one) takes its place.
         if (fromMailApp) {
             if (!replay) {
                 val hint = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString()?.trim()
@@ -64,11 +64,11 @@ class PaymentListenerService : NotificationListenerService() {
                 app.scope.launch {
                     app.container.repository.log(
                         sender, title, text,
-                        if (agentOn) "Email: the agent is checking it" + (hint?.let { " ($it)" } ?: "")
+                        if (agentOn) "Email: the agent took over its notification and is checking it" + (hint?.let { " ($it)" } ?: "")
                         else "Email: the agent is off, left alone",
                     )
                 }
-                app.container.inboxAgent.onMailAppNotification(sender, hint, sbn.key)
+                MailAppAlerts.toAlert(sbn)?.let { app.container.inboxAgent.onMailAppNotification(it) }
             }
             return
         }

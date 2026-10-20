@@ -29,10 +29,23 @@ class AlertMatcherTest {
     }
 
     @Test
-    fun undecidedEmailsKeepTheirNotification() {
+    fun undecidedEmailsLoseTheirNotificationToo() {
+        // The app tells you about it with its own notification instead.
         val entries = listOf(entry(11, 1, "Interview on Monday", MailActions.UNDECIDED))
         val r = AlertMatcher.match(listOf(alert("k2", "me@gmail.com", "Recruiter", "Interview on Monday")), entries, accounts)
-        assertTrue(r.clear.isEmpty())
+        assertEquals(listOf("k2"), r.clear)
+    }
+
+    @Test
+    fun anAlertFindsItsEmail() {
+        val entries = listOf(
+            entry(20, 1, "Interview on Monday", MailActions.NOTIFIED, from = "Recruiter"),
+            entry(21, 2, "Interview on Monday", MailActions.ARCHIVED, from = "Recruiter"),
+            entry(22, 1, "Flash sale", MailActions.ARCHIVED, from = "Shop"),
+        )
+        val found = AlertMatcher.entriesFor(alert("k5", "Me@Gmail.com", "Recruiter", "Interview on Monday\nSee you at 10"), entries, accounts)
+        assertEquals(listOf(20L), found.map { it.id })
+        assertTrue(AlertMatcher.entriesFor(alert("k6", "me@gmail.com", "Mum", "Dinner on Sunday?"), entries, accounts).isEmpty())
     }
 
     @Test

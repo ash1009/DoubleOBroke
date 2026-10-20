@@ -72,6 +72,20 @@ object MailAppAlerts {
         }
     }
 
+    /**
+     * Clears an email app's notification the agent takes over, and its bundle header once nothing for
+     * that account is left under it. False when it couldn't be cleared.
+     */
+    fun takeOver(alert: AppAlert): Boolean {
+        if (!cancel(alert.key)) return false
+        val left = active(testMode = true).filter { it.packageName == alert.packageName && it.key != alert.key }
+        val sameAccount = { a: AppAlert -> a.account == null || alert.account == null || a.account.equals(alert.account, ignoreCase = true) }
+        if (left.none { !it.summary && sameAccount(it) }) {
+            left.filter { it.summary && sameAccount(it) }.forEach { cancel(it.key) }
+        }
+        return true
+    }
+
     fun toAlert(sbn: StatusBarNotification): AppAlert? {
         val n = sbn.notification ?: return null
         val e = n.extras ?: return null

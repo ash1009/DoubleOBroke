@@ -11,6 +11,7 @@ import androidx.work.WorkerParameters
 import app.brokeometer.BrokeApp
 import app.brokeometer.data.Prefs
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -42,7 +43,6 @@ class InboxAgent(
     private val client: MailClient = MailClient(),
 ) {
     private val lock = Mutex()
-    @Volatile private var again = false
 
     /** Turns the agent on or off. Turning it on starts from now: older email is never touched. */
     suspend fun setOn(on: Boolean) {
@@ -58,46 +58,122 @@ class InboxAgent(
         }
     }
 
-    /**
-     * Called when an email app posts a notification. The app can hold any kind of account (Gmail
-     * often shows Yahoo accounts too), so the account comes from the notification itself. Several
-     * notifications in a row lead to one check, plus one more if new ones arrived while it ran.
-     */
-    fun onMailAppNotification(packageName: String, accountHint: String?, key: String) {
-        if (!prefs.mailAgentOn.value) return
+    /** An email app's notification the agent took over, and when. */
+    private data class TakenAlert(val alert: AppAlert, val at: Long)
+
+    /** Taken-over notifications whose email hasn't been found in the mailbox yet. */
+    private val waitingAlerts = ArrayList<TakenAlert>()
+
+    /** Ones told about as "couldn't check yet", until their email is found. */
+    private val uncheckedShown = ArrayList<TakenAlert>()
+
+    /** Each new email-app notification asks for a turn; turns asked for during one become one more. */
+    private val alertTurns = Channel<Unit>(Channel.CONFLATED)
+
+    init {
         scope.launch {
-            if (lock.isLocked) {
-                again = true
-                return@launch
-            }
-            lock.withLock {
-                do {
-                    again = false
-                    val all = dao.accounts()
-                    val hinted = accountHint?.let { hint -> all.filter { hint.contains(it.address, ignoreCase = true) } }.orEmpty()
-                    val accounts = when {
-                        hinted.isNotEmpty() -> hinted
-                        // An address the app has not been given: nothing to check.
-                        accountHint != null && accountHint.contains('@') -> emptyList()
-                        packageName == app.brokeometer.capture.MailAppAlerts.YAHOO ->
-                            all.filter { it.provider == MailProviders.YAHOO }.ifEmpty { all }
-                        else -> all
-                    }
-                    // An email a check already dealt with may only now get its notification.
-                    clearAppAlerts()
-                    if (accounts.isNotEmpty() && app.brokeometer.capture.MailAppAlerts.isActive(key)) {
-                        accounts.forEach { inbox(it) }
-                        clearAppAlerts()
-                        if (app.brokeometer.capture.MailAppAlerts.isActive(key)) {
-                            // The email app can be a moment ahead of the mail server.
-                            delay(15_000)
-                            accounts.forEach { inbox(it) }
-                            clearAppAlerts()
-                        }
-                    }
-                } while (again)
+            for (turn in alertTurns) {
+                try {
+                    takeOverTurn()
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // The next notification or check picks it up.
+                }
             }
         }
+    }
+
+    /**
+     * Called when an email app posts a notification for a new email. For an account the app has, the
+     * agent takes over straight away: the email app's notification is cleared before anything else, then
+     * the inbox is checked. You then hear from the app: important emails, and ones the AI couldn't sort,
+     * get a notification; the rest are marked read and archived quietly. If the email can't be found in
+     * the mailbox at all, you're told from the email app's own notification instead, so none is missed.
+     * The email app can hold any kind of account (Gmail often shows Yahoo accounts too), so the account
+     * comes from the notification itself.
+     */
+    fun onMailAppNotification(alert: AppAlert) {
+        if (!prefs.mailAgentOn.value) return
+        scope.launch {
+            // An address the app has not been given: its notification is left alone.
+            if (accountsFor(alert).isEmpty()) return@launch
+            app.brokeometer.capture.MailAppAlerts.takeOver(alert)
+            synchronized(waitingAlerts) {
+                waitingAlerts.removeAll { it.alert.key == alert.key }
+                waitingAlerts += TakenAlert(alert, System.currentTimeMillis())
+            }
+            alertTurns.trySend(Unit)
+        }
+    }
+
+    /** The accounts an email app's notification can be for. */
+    private suspend fun accountsFor(alert: AppAlert): List<MailAccountEntity> {
+        val all = dao.accounts()
+        val hint = alert.account
+        val hinted = hint?.let { h -> all.filter { h.contains(it.address, ignoreCase = true) } }.orEmpty()
+        return when {
+            hinted.isNotEmpty() -> hinted
+            hint != null && hint.contains('@') -> emptyList()
+            alert.packageName == app.brokeometer.capture.MailAppAlerts.YAHOO ->
+                all.filter { it.provider == MailProviders.YAHOO }.ifEmpty { all }
+            else -> all
+        }
+    }
+
+    private fun waiting(): List<TakenAlert> = synchronized(waitingAlerts) { waitingAlerts.toList() }
+
+    /** One go at the waiting notifications: check their inboxes, then once more a little later for any not found. */
+    private suspend fun takeOverTurn() {
+        val first = waiting()
+        if (first.isEmpty()) return
+        lock.withLock {
+            first.flatMap { accountsFor(it.alert) }.distinctBy { it.id }.forEach { inbox(it) }
+            clearAppAlerts()
+        }
+        if (waiting().isEmpty()) return
+        // The email app can be a moment ahead of the mail server.
+        delay(ALERT_GRACE_MS)
+        lock.withLock {
+            val left = waiting()
+            left.flatMap { accountsFor(it.alert) }.distinctBy { it.id }.forEach { inbox(it) }
+            clearAppAlerts()
+            // Still not in the mailbox: told from the email app's own notification, so it isn't missed.
+            val now = System.currentTimeMillis()
+            val stale = waiting().filter { now - it.at >= ALERT_GRACE_MS }
+            stale.forEach {
+                notifier.unchecked(it.alert)
+                repository.log(it.alert.packageName, it.alert.title, "", "Email: not in the mailbox yet, so you were told from the email app's notification")
+            }
+            synchronized(waitingAlerts) { waitingAlerts.removeAll { w -> stale.any { it.alert.key == w.alert.key } } }
+            synchronized(uncheckedShown) { uncheckedShown += stale }
+        }
+    }
+
+    /**
+     * Matches taken-over notifications with emails now in the list: those waiting stop waiting, and a
+     * "couldn't check yet" notification goes once its email is found (the email's own outcome tells you).
+     */
+    private suspend fun settleTaken() {
+        val waitingNow = waiting()
+        val shown = synchronized(uncheckedShown) { uncheckedShown.toList() }
+        if (waitingNow.isEmpty() && shown.isEmpty()) return
+        val oldest = (waitingNow + shown).minOf { it.at }
+        val entries = dao.inboxLogSince(oldest - TAKEN_MATCH_WINDOW_MS)
+        if (entries.isEmpty()) return
+        val accounts = dao.accounts().associate { it.id to it.address }
+        val foundIds = ArrayList<Long>()
+        fun found(t: TakenAlert): Boolean {
+            val matched = AlertMatcher.entriesFor(t.alert, entries.filter { it.at >= t.at - TAKEN_MATCH_WINDOW_MS }, accounts)
+            foundIds += matched.map { it.id }
+            return matched.isNotEmpty()
+        }
+        val settled = waitingNow.filter { found(it) }
+        synchronized(waitingAlerts) { waitingAlerts.removeAll { w -> settled.any { it.alert.key == w.alert.key } } }
+        val told = shown.filter { found(it) }
+        told.forEach { notifier.cancelUnchecked(it.alert) }
+        synchronized(uncheckedShown) { uncheckedShown.removeAll { w -> told.any { it.alert.key == w.alert.key } } }
+        if (foundIds.isNotEmpty()) dao.markCleared(foundIds.distinct())
     }
 
     /**
@@ -130,10 +206,11 @@ class InboxAgent(
     }
 
     /**
-     * Clears the email apps' notifications for emails the agent dealt with in the last few hours,
-     * keeping any for emails it could not decide on.
+     * Clears the email apps' notifications for emails the agent dealt with in the last few hours (ones
+     * that came in while it wasn't listening, say), and settles the ones it took over.
      */
     private suspend fun clearAppAlerts() {
+        settleTaken()
         val alerts = app.brokeometer.capture.MailAppAlerts.active(prefs.testMode)
         if (alerts.isEmpty()) return
         val entries = dao.inboxLogSince(System.currentTimeMillis() - TimeUnit.HOURS.toMillis(6))
@@ -270,15 +347,24 @@ class InboxAgent(
             dao.insertLog(row)
         }
         // Undecided: listed (keeping when it first came in, which is how long it's tried for), and tried again later.
-        suspend fun undecided(why: String) {
+        // [tell]: you get a notification the first time (the AI couldn't sort it). Not when only the mailbox
+        // refused a change to an email that doesn't matter.
+        suspend fun undecided(why: String, tell: Boolean) {
             if (waiting != null && waiting.action == MailActions.UNDECIDED) {
                 dao.setLogOutcome(waiting.id, MailActions.UNDECIDED, why)
             } else {
-                save(entry(null, MailActions.UNDECIDED, why))
+                val row = entry(null, MailActions.UNDECIDED, why)
+                val id = save(row)
+                if (tell) notifier.undecided(row.copy(id = id), account)
             }
+        }
+        // Sorted on a later try: a "couldn't sort" notification from before goes.
+        fun sortedNow() {
+            if (waiting != null) notifier.cancel(waiting.id)
         }
         if (item.seen) {
             save(entry(null, MailActions.READ_ELSEWHERE, "You had already read it, so it was left as it was."))
+            sortedNow()
             return false
         }
         val code = MailCodes.find(item.subject, item.text)
@@ -293,10 +379,11 @@ class InboxAgent(
         if (item.fromAddress.isNotEmpty() && item.fromAddress.lowercase() in prefs.quietSenders.value) {
             // A sender you said isn't important: no AI, just marked read.
             if (runCatching { s.markRead(MailFolders.INBOX, item.uid) }.isFailure) {
-                undecided("Left unread: your mailbox didn't take the change. Tried again on the next check.")
+                undecided("Left unread: your mailbox didn't take the change. Tried again on the next check.", tell = false)
                 return false
             }
             save(entry(null, MailActions.MARKED_READ, QUIET_SUMMARY))
+            sortedNow()
             return true
         }
         // A sender you said is important always reaches you.
@@ -309,8 +396,8 @@ class InboxAgent(
                     notifier.important(row.copy(id = id), account)
                     true
                 } else {
-                    // Left in the inbox with its notification, and tried again on later checks.
-                    undecided(decision.why)
+                    // Left unread in the inbox, you're told, and it's tried again on later checks.
+                    undecided(decision.why, tell = true)
                     false
                 }
             }
@@ -334,10 +421,11 @@ class InboxAgent(
                         archived -> save(entry(category, MailActions.ARCHIVED, decision.summary))
                         read -> save(entry(category, MailActions.MARKED_READ, decision.summary + " It couldn't be archived, so it was marked read in your inbox."))
                         else -> {
-                            undecided("Left unread: your mailbox didn't take the change. Tried again on the next check.")
+                            undecided("Left unread: your mailbox didn't take the change. Tried again on the next check.", tell = false)
                             return false
                         }
                     }
+                    sortedNow()
                 }
                 learn(account, item, category)
                 true
@@ -939,6 +1027,10 @@ class InboxAgent(
         private const val WARN_AFTER_REFUSALS = 3
         private const val WARN_AFTER_MS = 30 * 60_000L
         private const val MAX_PER_CHECK = 25
+        /** How long the email app may be ahead of the mail server before you're told from its notification. */
+        private const val ALERT_GRACE_MS = 15_000L
+        /** How far back a taken-over notification looks for its email in the list. */
+        private const val TAKEN_MATCH_WINDOW_MS = 24 * 60 * 60_000L
 
         /** Up to this many lots of new emails in one check, so a busy inbox or spam folder keeps up. */
         private const val MAX_BATCHES = 4
