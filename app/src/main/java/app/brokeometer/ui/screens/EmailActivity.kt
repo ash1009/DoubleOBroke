@@ -34,6 +34,12 @@ import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Drafts
 import androidx.compose.material.icons.rounded.SelectAll
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.input.ImeAction
+import app.brokeometer.ui.components.QuietButton
 import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -111,6 +117,16 @@ class ActivityFilters {
     var fromDay by mutableStateOf<String?>(null)
     var toDay by mutableStateOf<String?>(null)
     var unreadOnly by mutableStateOf(false)
+    /** Words searched for in the list: sender, subject, what the AI said, and the kind of email. */
+    var query by mutableStateOf("")
+}
+
+/** Whether an email on the list has every word of [query] in its sender, subject, summary or kind. */
+internal fun matchesSearch(e: MailLogEntity, query: String): Boolean {
+    val words = query.trim().lowercase(Locale.ROOT).split(Regex("\\s+")).filter { it.isNotEmpty() }
+    if (words.isEmpty()) return true
+    val blob = listOf(e.fromName, e.fromAddress, e.subject, e.summary, e.categoryName).joinToString(" ").lowercase(Locale.ROOT)
+    return words.all { it in blob }
 }
 
 /** Everything the Activity page needs from the Email page. */
@@ -162,6 +178,7 @@ fun ActivityPage(
     var fromDay by filters::fromDay
     var toDay by filters::toDay
     var unreadOnly by filters::unreadOnly
+    var query by filters::query
     // Home's "and N more" asks for the unread ones.
     val unreadAsked = vm?.showUnread?.collectAsStateWithLifecycle()?.value == true
     LaunchedEffect(unreadAsked) {
@@ -178,7 +195,7 @@ fun ActivityPage(
     var confirmAll by remember { mutableStateOf(false) }
 
     val now = System.currentTimeMillis()
-    val shown = remember(state.log, accountId, since, fromDay, toDay, unreadOnly) {
+    val shown = remember(state.log, accountId, since, fromDay, toDay, unreadOnly, query) {
         val start = when (since) {
             Since.ANY -> null
             Since.DAY -> now - TimeUnit.HOURS.toMillis(24)
@@ -191,7 +208,8 @@ fun ActivityPage(
             (accountId == null || e.accountId == accountId) &&
                 (start == null || e.at >= start) &&
                 (end == null || e.at < end) &&
-                (!unreadOnly || MailActions.leftUnread(e))
+                (!unreadOnly || MailActions.leftUnread(e)) &&
+                matchesSearch(e, query)
         }
     }
     // While some emails still need you, they come first, most important first; the rest go by day.
@@ -223,6 +241,8 @@ fun ActivityPage(
         picked = emptyList()
     }
     val unreadShown = shown.count { MailActions.leftUnread(it) }
+    val shownIds = remember(shown) { shown.map { it.id }.toSet() }
+    val mailboxSearch = vm?.mailboxSearch?.collectAsStateWithLifecycle()?.value
     val showAccount = state.accounts.size > 1
 
     Column(Modifier.fillMaxSize()) {
@@ -234,6 +254,7 @@ fun ActivityPage(
                 onPick = pickAction,
             )
         } else {
+        MailSearchBox(query, onChange = { query = it })
         // The filters and buttons: one row that scrolls sideways, with choices opening just below it.
         Row(
             Modifier
@@ -304,17 +325,41 @@ fun ActivityPage(
             if (state.problem != null) {
                 item("problem") { NoteCard(state.problem, LocalBrand.current.broke, actions.dismissProblem) }
             }
+            // Searching: older emails from the whole mailbox go under the list's own matches.
+            val mailbox: LazyListScope.() -> Unit = {
+                if (query.isNotBlank() && vm != null) {
+                    mailboxSearchItems(
+                        query = query,
+                        search = mailboxSearch,
+                        gmailOnly = state.accounts.isNotEmpty() && state.accounts.all { it.provider == app.brokeometer.mail.MailProviders.GMAIL },
+                        shownIds = shownIds,
+                        onSearch = { vm.searchMailbox(query, accountId) },
+                        row = { e, order ->
+                            ActivityRow(
+                                e, withDay = true, account = accountOf(state, e, showAccount), busy = e.id in state.working,
+                                actions = actions.copy(open = { opened ->
+                                    EmailBrowse.ids = order
+                                    actions.open(opened)
+                                }),
+                                picking = false, picked = false, onToggle = {},
+                            )
+                        },
+                    )
+                }
+            }
             if (shown.isEmpty()) {
                 item("empty") {
                     EmptyNote(
                         title = if (state.log.isEmpty()) "Nothing yet" else "Nothing here",
                         body = when {
+                            query.isNotBlank() && state.log.isNotEmpty() -> "Nothing on the list matches \"${query.trim()}\"."
                             state.log.isNotEmpty() -> "No emails match these filters."
                             state.agentOn -> "Every email the agent handles shows here, newest first."
                             else -> "Turn on the agent under What matters. Every email it handles then shows here."
                         },
                     )
                 }
+                mailbox()
                 return@LazyColumn
             }
             if (needsYou.isNotEmpty()) {
@@ -334,6 +379,7 @@ fun ActivityPage(
                     ActivityRow(e, withDay = false, account = accountOf(state, e, showAccount), busy = e.id in state.working, actions = rowActions, picking = picking, picked = e.id in picked, onToggle = toggle)
                 }
             }
+            mailbox()
         }
         }
     }
@@ -513,6 +559,7 @@ fun outcomeOf(e: MailLogEntity): Pair<String, Color> {
         a.MARKED_UNREAD -> "Marked unread" to brand.action
         a.DELETED -> "Deleted, in the bin" to muted
         a.STARRED -> "On your Important page" to brand.action
+        a.FOUND -> "Found in your mailbox" to muted
         else -> e.action to muted
     }
 }
@@ -659,5 +706,105 @@ fun NoteCard(text: String, color: Color, onOk: () -> Unit) {
     ) {
         Text(text, style = MaterialTheme.typography.bodyMedium, color = color, modifier = Modifier.weight(1f))
         TextButton(onClick = onOk) { Text("OK") }
+    }
+}
+
+
+/** The search box at the top of Activity. */
+@Composable
+private fun MailSearchBox(query: String, onChange: (String) -> Unit) {
+    val brand = LocalBrand.current
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 6.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.Search, contentDescription = null, tint = muted)
+        Spacer(Modifier.width(10.dp))
+        Box(Modifier.weight(1f)) {
+            if (query.isEmpty()) Text("Search emails", color = muted, style = MaterialTheme.typography.bodyLarge)
+            BasicTextField(
+                value = query,
+                onValueChange = onChange,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                cursorBrush = SolidColor(brand.action),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (query.isNotEmpty()) {
+            Icon(Icons.Rounded.Close, contentDescription = "Clear search", tint = muted, modifier = Modifier.clickable { onChange("") })
+        }
+    }
+}
+
+/**
+ * Under the list's matches: a button to search the whole mailbox (older emails, and in Gmail the words
+ * inside emails too), then what it found that isn't already shown above.
+ */
+private fun LazyListScope.mailboxSearchItems(
+    query: String,
+    search: MailViewModel.MailboxSearch?,
+    gmailOnly: Boolean,
+    shownIds: Set<Long>,
+    onSearch: () -> Unit,
+    row: @Composable (MailLogEntity, List<Long>) -> Unit,
+) {
+    val q = query.trim()
+    val done = search?.takeIf { it.query == q }
+    when {
+        done == null -> item("mailbox-ask") {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                QuietButton(
+                    if (gmailOnly) "Search all of Gmail" else "Search your whole mailbox",
+                    onClick = onSearch,
+                    enabled = search?.busy != true,
+                    modifier = Modifier.fillMaxWidth(),
+                    height = 44.dp,
+                )
+                Text(
+                    if (gmailOnly) "For older emails too, and words inside emails." else "For older emails too.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        done.busy -> item("mailbox-busy") {
+            Row(Modifier.padding(horizontal = 20.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(color = LocalBrand.current.action, strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(12.dp))
+                Text("Searching your mailbox…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        else -> {
+            val extra = done.found.filter { it.id !in shownIds }
+            val order = extra.map { it.id }
+            item("mailbox-head") { SectionTitle("In your mailbox") }
+            if (extra.isEmpty()) {
+                item("mailbox-none") {
+                    Text(
+                        if (done.found.isEmpty()) "Nothing found." else "Nothing more than what's above.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 20.dp),
+                    )
+                }
+            }
+            items(extra, key = { "f${it.id}" }) { e -> row(e, order) }
+            done.problem?.let { p ->
+                item("mailbox-problem") {
+                    Column(Modifier.padding(horizontal = 20.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(p, style = MaterialTheme.typography.bodySmall, color = LocalBrand.current.broke)
+                        QuietButton("Try again", onClick = onSearch, height = 40.dp)
+                    }
+                }
+            }
+        }
     }
 }

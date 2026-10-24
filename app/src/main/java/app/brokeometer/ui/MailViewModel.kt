@@ -168,6 +168,47 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** A search of the whole mailbox: what was searched, whether it's still going, what it found, and any problem. */
+    data class MailboxSearch(val query: String, val busy: Boolean, val found: List<MailLogEntity> = emptyList(), val problem: String? = null)
+
+    private val _mailboxSearch = MutableStateFlow<MailboxSearch?>(null)
+    val mailboxSearch: StateFlow<MailboxSearch?> = _mailboxSearch
+
+    /**
+     * Searches the whole mailbox of one account ([accountId]) or all of them, for older emails too. Emails
+     * already on the list come back as their list entry, so they open with everything the list has.
+     */
+    fun searchMailbox(query: String, accountId: Long?) {
+        val q = query.trim()
+        if (q.isEmpty() || _mailboxSearch.value?.busy == true) return
+        _mailboxSearch.value = MailboxSearch(q, busy = true)
+        viewModelScope.launch {
+            val accounts = dao.accounts().filter { accountId == null || it.id == accountId }
+            val listed = log.value.filter { it.messageId != null }.groupBy { it.messageId }
+            val found = ArrayList<MailLogEntity>()
+            val missed = ArrayList<String>()
+            for (a in accounts) {
+                try {
+                    container.mailReader.search(a, q).forEach { f ->
+                        found += listed[f.messageId]?.firstOrNull { it.accountId == a.id } ?: FoundMail.entry(a.id, f)
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    missed += a.address
+                }
+            }
+            val sorted = found.distinctBy { it.id }.sortedByDescending { it.at }
+            FoundMail.keep(sorted)
+            _mailboxSearch.value = MailboxSearch(
+                q,
+                busy = false,
+                found = sorted,
+                problem = if (missed.isEmpty()) null else "Couldn't search ${missed.joinToString(", ")}. Check your connection and try again.",
+            )
+        }
+    }
+
     fun setAgentOn(on: Boolean) = viewModelScope.launch { inbox.setOn(on) }
 
     fun checkNow() {

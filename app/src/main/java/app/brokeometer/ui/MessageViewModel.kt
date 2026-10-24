@@ -34,6 +34,41 @@ object EmailBrowse {
     @Volatile var ids: List<Long> = emptyList()
 }
 
+/**
+ * Emails found by a search of the whole mailbox that aren't on the list, shaped like list entries so they
+ * open the same way. Their ids are far below zero, apart from starred emails' (which are just below zero).
+ * Kept while the app is open.
+ */
+object FoundMail {
+    const val BASE = -1_000_000_000_000L
+    private val next = java.util.concurrent.atomic.AtomicLong(BASE)
+
+    @Volatile var byId: Map<Long, MailLogEntity> = emptyMap()
+        private set
+
+    fun isFound(id: Long): Boolean = id <= BASE
+
+    fun entry(accountId: Long, f: app.brokeometer.mail.FoundItem): MailLogEntity = MailLogEntity(
+        id = next.getAndDecrement(),
+        at = f.date.takeIf { it > 0 } ?: System.currentTimeMillis(),
+        accountId = accountId,
+        folder = MailFolders.INBOX,
+        uid = f.uid,
+        messageId = f.messageId,
+        fromName = f.fromName,
+        fromAddress = f.fromAddress,
+        subject = f.subject,
+        categoryId = null,
+        categoryName = "",
+        action = MailActions.FOUND,
+        summary = "",
+    )
+
+    fun keep(entries: List<MailLogEntity>) {
+        synchronized(this) { byId = byId + entries.filter { isFound(it.id) }.associateBy { it.id } }
+    }
+}
+
 /** A starred email the agent never handled, shaped like a list entry so it opens the same way. */
 fun MailStarredEntity.asLog(): MailLogEntity = MailLogEntity(
     id = -id,
@@ -66,13 +101,18 @@ class MessageViewModel(application: Application, state: SavedStateHandle) : Andr
         ?: (EmailBrowse.ids.takeIf { id in it } ?: listOf(id)).also { state["ids"] = it.toLongArray() }
 
     fun entry(id: Long): Flow<MailLogEntity?> {
+        if (FoundMail.isFound(id)) return kotlinx.coroutines.flow.flowOf(FoundMail.byId[id])
         if (id >= 0) return dao.observeLogEntry(id)
         // Unstarring it here takes it off the page, but it stays open until you leave it.
         var last: MailLogEntity? = null
         return dao.observeStarredEntry(-id).map { r -> (r?.asLog() ?: last).also { last = it } }
     }
 
-    suspend fun log(id: Long): MailLogEntity? = if (id < 0) dao.starredEntry(-id)?.asLog() else dao.log(id)
+    suspend fun log(id: Long): MailLogEntity? = when {
+        FoundMail.isFound(id) -> FoundMail.byId[id]
+        id < 0 -> dao.starredEntry(-id)?.asLog()
+        else -> dao.log(id)
+    }
 
     val accounts: StateFlow<List<MailAccountEntity>> =
         dao.observeAccounts().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())

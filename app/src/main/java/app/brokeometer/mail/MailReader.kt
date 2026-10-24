@@ -198,6 +198,10 @@ class MailReader(
         }
     }
 
+    /** Emails matching [query] anywhere in the account's mailbox, newest first. Throws when it can't be reached. */
+    suspend fun search(account: MailAccountEntity, query: String, max: Int = SEARCH_MAX): List<FoundItem> =
+        withSession(account) { s -> s.search(query, max) }
+
     /** An attached file of an email, saved in the app's cache to open with another app. */
     data class Saved(val file: File, val type: String)
 
@@ -319,6 +323,8 @@ class MailReader(
         private const val MAX_CHARS = 8_000_000L
         private const val MAX_ONE_CHARS = 3_000_000L
         private const val PREFETCH_COUNT = 20
+        /** Emails a search of the whole mailbox brings back, per account. */
+        private const val SEARCH_MAX = 30
         /** How long a connection stays open after it was last used. */
         private const val KEEP_OPEN_MS = 60_000L
         private const val PREFETCH_EVERY_MS = 5 * 60_000L

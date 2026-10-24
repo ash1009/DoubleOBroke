@@ -18,6 +18,7 @@ import javax.mail.search.FlagTerm
 import javax.mail.search.FromStringTerm
 import javax.mail.search.HeaderTerm
 import javax.mail.search.OrTerm
+import javax.mail.search.SubjectTerm
 
 /** One new email, as much as the agent needs to judge it. */
 data class MailItem(
@@ -34,6 +35,16 @@ data class MailItem(
 )
 
 /** A whole email, for reading in the app. */
+/** An email found by a search of the whole mailbox. [uid] is its inbox UID when it's in the inbox, else 0. */
+data class FoundItem(
+    val uid: Long,
+    val messageId: String,
+    val fromName: String,
+    val fromAddress: String,
+    val subject: String,
+    val date: Long,
+)
+
 data class FullEmail(
     val fromName: String,
     val fromAddress: String,
@@ -473,6 +484,53 @@ class MailSession(private val store: IMAPStore, private val provider: String, pr
             }
         }
         return null
+    }
+
+    /**
+     * The newest emails, at most [max], matching [query] anywhere in the mailbox, leaving out spam and the
+     * bin: in Gmail, Gmail's own search of All Mail (the same as searching in Gmail, words inside emails
+     * too); elsewhere, the sender or the subject, in the inbox and the archive. Nothing is marked read.
+     * Emails with no Message-ID are left out, as they can't be opened again.
+     */
+    fun search(query: String, max: Int): List<FoundItem> {
+        val q = query.trim()
+        if (q.isEmpty()) return emptyList()
+        val places = if (provider == MailProviders.GMAIL) listOfNotNull(allMail() ?: inbox())
+        else listOfNotNull(inbox(), archive()).distinctBy { it.fullName }
+        val inboxName = inbox().fullName
+        val out = ArrayList<FoundItem>()
+        for (f in places) {
+            f.open(Folder.READ_ONLY)
+            try {
+                val messages: Array<Message> = if (provider == MailProviders.GMAIL) {
+                    val uids = gmailSearch(f, q).sortedDescending().take(max)
+                    if (uids.isEmpty()) emptyArray() else f.getMessagesByUID(uids.toLongArray()).filterNotNull().toTypedArray()
+                } else {
+                    f.search(OrTerm(SubjectTerm(q), FromStringTerm(q))).takeLast(max).toTypedArray()
+                }
+                if (messages.isEmpty()) continue
+                f.fetch(messages, FetchProfile().apply {
+                    add(FetchProfile.Item.ENVELOPE)
+                    add(UIDFolder.FetchProfileItem.UID)
+                })
+                for (m in messages) {
+                    val mm = m as? MimeMessage ?: continue
+                    val id = runCatching { mm.messageID }.getOrNull()?.takeIf { it.isNotBlank() } ?: continue
+                    val from = runCatching { mm.from?.firstOrNull() as? InternetAddress }.getOrNull()
+                    out += FoundItem(
+                        uid = if (f.fullName == inboxName) runCatching { f.getUID(m) }.getOrDefault(0L) else 0L,
+                        messageId = id,
+                        fromName = from?.personal?.trim().orEmpty(),
+                        fromAddress = from?.address?.trim()?.lowercase(Locale.ROOT).orEmpty(),
+                        subject = runCatching { mm.subject }.getOrNull().orEmpty(),
+                        date = runCatching { (mm.receivedDate ?: mm.sentDate)?.time }.getOrNull() ?: 0L,
+                    )
+                }
+            } finally {
+                runCatching { f.close(false) }
+            }
+        }
+        return out.distinctBy { it.messageId }.sortedByDescending { it.date }.take(max)
     }
 
     /** Whether this session can still be used (the server hasn't closed it). */

@@ -131,6 +131,11 @@ object MailActions {
      * used to open it the same way as the others.
      */
     const val STARRED = "STARRED"
+    /**
+     * Only in a search of the whole mailbox: an email the agent never handled. Never saved in the list;
+     * used to open it the same way as the others.
+     */
+    const val FOUND = "FOUND"
 
     private val unreadActions = setOf(NOTIFIED, KEPT, UNDECIDED, NOT_SPAM, MOVED_FROM_SPAM, MARKED_UNREAD)
     private val readActions = setOf(READ_ELSEWHERE, MARKED_READ)
