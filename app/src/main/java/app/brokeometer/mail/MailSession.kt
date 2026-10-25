@@ -261,8 +261,10 @@ class MailSession(private val store: IMAPStore, private val provider: String, pr
                     }
                 }
             }
-            for (id in search.filter { it !in out }.distinct().take(MAX_SEARCHES)) {
-                val m = inbox.search(HeaderTerm("Message-ID", id)).firstOrNull()
+            val wanted = search.filter { it !in out }.distinct().take(MAX_SEARCHES)
+            val inInbox = withIds(inbox, byIds(inbox, wanted), flags = true)
+            for (id in wanted) {
+                val m = inInbox[id]
                 if (m == null) notInInbox += id else out[id] = if (m.isSet(Flags.Flag.SEEN)) MailPlace.INBOX_READ else MailPlace.INBOX_UNREAD
             }
         } finally {
@@ -272,9 +274,8 @@ class MailSession(private val store: IMAPStore, private val provider: String, pr
         val archive = archive() ?: return out
         archive.open(Folder.READ_ONLY)
         try {
-            for (id in notInInbox) {
-                out[id] = if (archive.search(HeaderTerm("Message-ID", id)).isNotEmpty()) MailPlace.ARCHIVED else MailPlace.GONE
-            }
+            val archived = withIds(archive, byIds(archive, notInInbox), flags = false)
+            for (id in notInInbox) out[id] = if (id in archived) MailPlace.ARCHIVED else MailPlace.GONE
         } finally {
             runCatching { archive.close(false) }
         }
@@ -286,7 +287,7 @@ class MailSession(private val store: IMAPStore, private val provider: String, pr
         val source = archive() ?: return false
         source.open(Folder.READ_WRITE)
         try {
-            val found = source.search(HeaderTerm("Message-ID", messageId))
+            val found = byIds(source, listOf(messageId))
             if (found.isEmpty()) return false
             found.forEach { it.setFlag(Flags.Flag.SEEN, false) }
             if (provider == MailProviders.GMAIL) {
@@ -364,11 +365,7 @@ class MailSession(private val store: IMAPStore, private val provider: String, pr
         try {
             val found = LinkedHashSet<Message>()
             uids.chunked(BATCH).forEach { chunk -> found += inbox.getMessagesByUID(chunk.toLongArray()).filterNotNull() }
-            messageIds.chunked(ID_BATCH).forEach { chunk ->
-                val terms = chunk.map { HeaderTerm("Message-ID", it) }
-                val term = if (terms.size == 1) terms[0] else OrTerm(terms.toTypedArray())
-                found += inbox.search(term)
-            }
+            found += byIds(inbox, messageIds.distinct())
             if (found.isNotEmpty()) inbox.setFlags(found.toTypedArray(), Flags(Flags.Flag.SEEN), seen)
             return found.size
         } finally {
@@ -383,7 +380,7 @@ class MailSession(private val store: IMAPStore, private val provider: String, pr
             if (from.fullName == bin.fullName) continue
             from.open(Folder.READ_WRITE)
             try {
-                val found = from.search(HeaderTerm("Message-ID", messageId))
+                val found = byIds(from, listOf(messageId))
                 if (found.isNotEmpty()) {
                     from.moveMessages(found, bin)
                     return true
@@ -402,7 +399,7 @@ class MailSession(private val store: IMAPStore, private val provider: String, pr
         if (to.fullName == from.fullName) return false
         from.open(Folder.READ_WRITE)
         try {
-            val found = from.search(HeaderTerm("Message-ID", messageId))
+            val found = byIds(from, listOf(messageId))
             if (found.isEmpty()) return false
             from.setFlags(found, Flags(Flags.Flag.SEEN), true)
             from.moveMessages(found, to)
@@ -603,7 +600,7 @@ class MailSession(private val store: IMAPStore, private val provider: String, pr
         val id = message.messageID
         folder.open(Folder.READ_WRITE)
         try {
-            if (id != null && folder.search(HeaderTerm("Message-ID", id)).isNotEmpty()) return
+            if (id != null && byIds(folder, listOf(id)).isNotEmpty()) return
             message.setFlag(Flags.Flag.SEEN, true)
             folder.appendMessages(arrayOf(message))
         } finally {
@@ -664,7 +661,7 @@ class MailSession(private val store: IMAPStore, private val provider: String, pr
         spam.open(Folder.READ_WRITE)
         try {
             val found: Array<Message> = when {
-                messageId != null -> spam.search(HeaderTerm("Message-ID", messageId))
+                messageId != null -> byIds(spam, listOf(messageId))
                 uid != null -> listOfNotNull(spam.getMessageByUID(uid)).toTypedArray()
                 else -> emptyArray()
             }
@@ -681,7 +678,7 @@ class MailSession(private val store: IMAPStore, private val provider: String, pr
         val bin = trash() ?: return false
         bin.open(Folder.READ_WRITE)
         try {
-            val found = bin.search(HeaderTerm("Message-ID", messageId))
+            val found = byIds(bin, listOf(messageId))
             if (found.isEmpty()) return false
             found.forEach { it.setFlag(Flags.Flag.SEEN, false) }
             bin.moveMessages(found, inbox())
@@ -751,7 +748,7 @@ class MailSession(private val store: IMAPStore, private val provider: String, pr
         for (folder in markedPlaces()) {
             folder.open(Folder.READ_WRITE)
             try {
-                val messages = folder.search(HeaderTerm("Message-ID", messageId))
+                val messages = byIds(folder, listOf(messageId))
                 if (messages.isEmpty()) continue
                 found = true
                 folder.setFlags(messages, Flags(Flags.Flag.FLAGGED), on)
@@ -765,6 +762,84 @@ class MailSession(private val store: IMAPStore, private val provider: String, pr
             }
         }
         return found
+    }
+
+    /**
+     * Emails in an open [folder] with these Message-IDs. Gmail's own search answers at once, so it's used
+     * for Gmail; a search of every email's headers (slow on a big mailbox) is for other mailboxes, or when
+     * Gmail's search doesn't answer.
+     */
+    private fun byIds(folder: IMAPFolder, ids: Collection<String>): Array<Message> {
+        if (ids.isEmpty()) return emptyArray()
+        if (provider == MailProviders.GMAIL) {
+            try {
+                val uids = LinkedHashSet<Long>()
+                for (id in ids) uids += gmailSearch(folder, "rfc822msgid:" + id.trim().removePrefix("<").removeSuffix(">"))
+                if (uids.isEmpty()) return emptyArray()
+                return folder.getMessagesByUID(uids.sorted().toLongArray()).filterNotNull().toTypedArray()
+            } catch (e: MessagingException) {
+                // Falls back to the header search below.
+            }
+        }
+        val out = ArrayList<Message>()
+        ids.chunked(ID_BATCH).forEach { chunk ->
+            val terms = chunk.map { HeaderTerm("Message-ID", it) }
+            out += folder.search(if (terms.size == 1) terms[0] else OrTerm(terms.toTypedArray()))
+        }
+        return out.toTypedArray()
+    }
+
+    /** [messages] of an open [folder] by their Message-ID, with their flags too when [flags] asks. */
+    private fun withIds(folder: IMAPFolder, messages: Array<Message>, flags: Boolean): Map<String, Message> {
+        if (messages.isEmpty()) return emptyMap()
+        folder.fetch(messages, FetchProfile().apply {
+            add("Message-ID")
+            if (flags) add(FetchProfile.Item.FLAGS)
+        })
+        return messages.mapNotNull { m -> runCatching { (m as? MimeMessage)?.messageID }.getOrNull()?.let { it to m } }.toMap()
+    }
+
+    /**
+     * Marks inbox emails read or unread. Each is found by the inbox UID the app noted (checked against its
+     * Message-ID, as a UID changes when an email moves), or else by its Message-ID. Returns how many were found.
+     */
+    fun setSeen(emails: List<Pair<Long?, String?>>, seen: Boolean): Int {
+        if (emails.isEmpty()) return 0
+        val inbox = inbox()
+        inbox.open(Folder.READ_WRITE)
+        try {
+            val found = LinkedHashMap<Int, Message>()
+            val search = ArrayList<String>()
+            val byUid = emails.filter { (it.first ?: 0L) > 0L }
+            if (byUid.isNotEmpty()) {
+                val messages = byUid.map { it.first!! }.distinct().sorted().chunked(BATCH)
+                    .flatMap { chunk -> inbox.getMessagesByUID(chunk.toLongArray()).filterNotNull() }
+                    .toTypedArray()
+                if (messages.isNotEmpty()) {
+                    inbox.fetch(messages, FetchProfile().apply {
+                        add(UIDFolder.FetchProfileItem.UID)
+                        add("Message-ID")
+                    })
+                }
+                val at = messages.associateBy { inbox.getUID(it) }
+                for ((uid, id) in byUid) {
+                    val m = at[uid!!]
+                    val same = m != null && (id == null || runCatching { (m as? MimeMessage)?.messageID }.getOrNull() == id)
+                    if (same) {
+                        val hit = m!!
+                        found[hit.messageNumber] = hit
+                    } else if (id != null) {
+                        search += id
+                    }
+                }
+            }
+            search += emails.filter { (it.first ?: 0L) <= 0L }.mapNotNull { it.second }
+            byIds(inbox, search.distinct()).forEach { found[it.messageNumber] = it }
+            if (found.isNotEmpty()) inbox.setFlags(found.values.toTypedArray(), Flags(Flags.Flag.SEEN), seen)
+            return found.size
+        } finally {
+            runCatching { inbox.close(false) }
+        }
     }
 
     /** UIDs in an open Gmail folder matching a Gmail search ("is:important"), using Gmail's own IMAP search. */

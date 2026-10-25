@@ -98,12 +98,14 @@ class AppContainer(app: BrokeApp) {
     val mailDatabase: MailDatabase = MailDatabase.create(app)
     val mail = MailAgent(app, mailDatabase.dao(), prefs, claude, gemini, app.scope)
     val mailNotifier = MailNotifier(app)
-    val mailReader = MailReader(mailDatabase.dao(), prefs, mail, java.io.File(app.cacheDir, "mail"))
+    /** One open connection per account, shared by reading emails and the changes you make to them. */
+    val mailSessions = app.brokeometer.mail.MailSessions(prefs, mail)
+    val mailReader = MailReader(mailDatabase.dao(), prefs, mail, java.io.File(app.cacheDir, "mail"), sessions = mailSessions)
     val tasksDatabase: TasksDatabase = TasksDatabase.create(app)
     val tasks = TaskAgent(app, tasksDatabase.dao(), mailDatabase.dao(), mail, mailReader, app.scope)
     // An email you're told about is fetched straight away, so it opens at once from the notification.
-    val inboxAgent = InboxAgent(app, mailDatabase.dao(), prefs, mail, mailNotifier, app.scope, repository, onTold = { mailReader.prefetch(listOf(it)) }, tasks = tasks)
-    val starredMail = StarredMail(mailDatabase.dao(), prefs, mail)
+    val inboxAgent = InboxAgent(app, mailDatabase.dao(), prefs, mail, mailNotifier, app.scope, repository, onTold = { mailReader.prefetch(listOf(it)) }, tasks = tasks, sessions = mailSessions)
+    val starredMail = StarredMail(mailDatabase.dao(), prefs, mail, sessions = mailSessions)
     val news = NewsAgent(app, claude) { text, outcome -> repository.log(LogKinds.NEWS_SOURCE, "News", text, outcome) }
     val notesDatabase: NotesDatabase = NotesDatabase.create(app)
     val travelDatabase: TravelDatabase = TravelDatabase.create(app)

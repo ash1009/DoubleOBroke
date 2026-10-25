@@ -16,9 +16,17 @@ class StarredMail(
     private val dao: MailDao,
     private val prefs: Prefs,
     private val mail: MailAgent,
+    /** The open connections shared with reading, so starring doesn't sign in each time. */
+    private val sessions: MailSessions? = null,
     private val client: MailClient = MailClient(),
 ) {
+    /** Writing the page's rows (quick); reading the mailboxes happens outside it. */
     private val lock = Mutex()
+    /** One match with the mailboxes at a time. */
+    private val syncing = Mutex()
+
+    /** Stars changed in the app lately (account and Message-ID to when), which a match already under way mustn't undo. */
+    private val changedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     /** When the page was last matched with the mailboxes. */
     @Volatile var syncedAt = 0L
@@ -26,15 +34,16 @@ class StarredMail(
 
     /** Matches the page with each account's mailbox (or just [accountId]'s). Null when it went fine, otherwise the problem. */
     suspend fun sync(accountId: Long? = null): String? = withContext(Dispatchers.IO) {
-        lock.withLock {
+        syncing.withLock {
             var problem: String? = null
             for (account in dao.accounts()) {
                 if (accountId != null && account.id != accountId) continue
                 val password = prefs.mailPassword(account.address)
                 if (password.isEmpty()) continue
                 try {
+                    val startedAt = System.currentTimeMillis()
                     val found = client.session(mail.server(account), account.address, password, account.provider, background = true).use { it.marked(MAX) }
-                    save(account.id, found)
+                    lock.withLock { save(account.id, found, startedAt) }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -46,10 +55,15 @@ class StarredMail(
         }
     }
 
-    /** Keeps each email's row (and so its place on the page), adds new ones and drops ones no longer starred. */
-    private suspend fun save(accountId: Long, found: List<MarkedItem>) {
+    /**
+     * Keeps each email's row (and so its place on the page), adds new ones and drops ones no longer starred.
+     * A star changed in the app after [startedAt] stays as you left it.
+     */
+    private suspend fun save(accountId: Long, found: List<MarkedItem>, startedAt: Long) {
+        fun changedSince(messageId: String) = (changedAt["$accountId|$messageId"] ?: 0L) >= startedAt
         val have = dao.starredOf(accountId).associateBy { it.messageId }
         for (f in found) {
+            if (changedSince(f.messageId)) continue
             val old = have[f.messageId]
             val row = MailStarredEntity(
                 id = old?.id ?: 0,
@@ -66,7 +80,7 @@ class StarredMail(
             if (old == null) dao.insertStarred(row) else if (old != row) dao.updateStarred(row)
         }
         val keep = found.map { it.messageId }.toSet()
-        val gone = have.values.filter { it.messageId !in keep }.map { it.id }
+        val gone = have.values.filter { it.messageId !in keep && !changedSince(it.messageId) }.map { it.id }
         if (gone.isNotEmpty()) dao.deleteStarred(gone)
     }
 
@@ -75,18 +89,21 @@ class StarredMail(
 
     /** Stars or unstars an email in its mailbox, then on the page. False when the mailbox couldn't be changed. */
     suspend fun setStar(accountId: Long, messageId: String, on: Boolean, about: About): Boolean = withContext(Dispatchers.IO) {
+        val account = dao.account(accountId) ?: return@withContext false
+        val password = prefs.mailPassword(account.address)
+        if (password.isEmpty()) return@withContext false
+        val changed = try {
+            val shared = sessions
+            if (shared != null) shared.use(account) { it.setStar(messageId, on) }
+            else client.session(mail.server(account), account.address, password, account.provider).use { it.setStar(messageId, on) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            false
+        }
+        if (!changed) return@withContext false
+        changedAt["$accountId|$messageId"] = System.currentTimeMillis()
         lock.withLock {
-            val account = dao.account(accountId) ?: return@withLock false
-            val password = prefs.mailPassword(account.address)
-            if (password.isEmpty()) return@withLock false
-            val changed = try {
-                client.session(mail.server(account), account.address, password, account.provider).use { it.setStar(messageId, on) }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                false
-            }
-            if (!changed) return@withLock false
             val old = dao.starredFor(accountId, messageId)
             if (on) {
                 val row = MailStarredEntity(

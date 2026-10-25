@@ -394,7 +394,7 @@ class MailClient {
         /** Refused sign-ins for [address] in a row, or null when the last one worked. */
         fun troubleFor(address: String): Trouble? = trouble[address.lowercase(Locale.ROOT)]
 
-        private const val PER_ACCOUNT = 2
+        private const val PER_ACCOUNT = 3
         private const val WAIT_FOR_TURN_S = 90L
         private const val WAIT_FOR_YOU_S = 15L
         private const val LOGIN_TRIES = 2

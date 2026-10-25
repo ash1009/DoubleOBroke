@@ -2,10 +2,6 @@ package app.brokeometer.mail
 
 import app.brokeometer.data.Prefs
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
@@ -39,6 +35,8 @@ class MailReader(
     private val mail: MailAgent,
     cacheDir: File? = null,
     private val client: MailClient = MailClient(),
+    /** The open connections shared with the things you do to emails (marking read, starring). */
+    private val sessions: MailSessions = MailSessions(prefs, mail, client),
 ) {
     sealed interface Opened {
         data class Email(val email: FullEmail) : Opened
@@ -88,48 +86,9 @@ class MailReader(
     private fun cachedFor(log: MailLogEntity): FullEmail? =
         cached(log.id)?.takeIf { it.messageId == null || log.messageId == null || it.messageId == log.messageId }
 
-    // One open connection per account, used by one thing at a time, closed after a minute unused.
-    private class Warm(val session: MailSession)
-    private val warm = java.util.concurrent.ConcurrentHashMap<Long, Warm>()
-    private val turns = java.util.concurrent.ConcurrentHashMap<Long, Mutex>()
-    private val closers = java.util.concurrent.ConcurrentHashMap<Long, Job>()
-
-    /**
-     * Runs [block] on the account's open connection, signing in only when there isn't one. A connection
-     * the server had closed is replaced and [block] tried once more.
-     */
-    private suspend fun <T> withSession(account: MailAccountEntity, block: (MailSession) -> T): T {
-        val turn = turns.getOrPut(account.id) { Mutex() }
-        return turn.withLock {
-            withContext(Dispatchers.IO) {
-                closers.remove(account.id)?.cancel()
-                val reused = warm[account.id]?.session?.takeIf { it.isOpen }
-                val result = try {
-                    block(reused ?: connect(account))
-                } catch (e: Exception) {
-                    if (reused == null || e is MailClient.MailError) throw e
-                    drop(account.id)
-                    block(connect(account))
-                }
-                closers[account.id] = background.launch {
-                    delay(KEEP_OPEN_MS)
-                    turn.withLock { drop(account.id) }
-                }
-                result
-            }
-        }
-    }
-
-    private fun connect(account: MailAccountEntity): MailSession {
-        drop(account.id)
-        val s = client.session(mail.server(account), account.address, prefs.mailPassword(account.address), account.provider)
-        warm[account.id] = Warm(s)
-        return s
-    }
-
-    private fun drop(accountId: Long) {
-        warm.remove(accountId)?.let { runCatching { it.session.close() } }
-    }
+    /** Runs [block] on the account's open connection (see [MailSessions]). */
+    private suspend fun <T> withSession(account: MailAccountEntity, block: (MailSession) -> T): T =
+        sessions.use(account) { block(it) }
 
     suspend fun open(log: MailLogEntity): Opened {
         synchronized(cacheLock) { cache[log.id] }?.takeIf { it.messageId == null || log.messageId == null || it.messageId == log.messageId }
@@ -202,9 +161,14 @@ class MailReader(
     suspend fun search(account: MailAccountEntity, query: String, max: Int = SEARCH_MAX): List<FoundItem> =
         withSession(account) { s -> s.search(query, max) }
 
-    /** Emails from the last [days] days, newest first, as the agent sees them. Throws when it can't be reached. */
-    suspend fun recent(account: MailAccountEntity, days: Long, max: Int): List<MailItem> =
-        withSession(account) { s -> s.recent(days, max) }
+    /**
+     * Emails from the last [days] days, newest first, as the agent sees them. Throws when it can't be
+     * reached. A long read, so on a connection of its own: opening an email doesn't wait for it.
+     */
+    suspend fun recent(account: MailAccountEntity, days: Long, max: Int): List<MailItem> = withContext(Dispatchers.IO) {
+        client.session(mail.server(account), account.address, prefs.mailPassword(account.address), account.provider, background = true)
+            .use { s -> s.recent(days, max) }
+    }
 
     /** An attached file of an email, saved in the app's cache to open with another app. */
     data class Saved(val file: File, val type: String)
@@ -329,8 +293,6 @@ class MailReader(
         private const val PREFETCH_COUNT = 20
         /** Emails a search of the whole mailbox brings back, per account. */
         private const val SEARCH_MAX = 30
-        /** How long a connection stays open after it was last used. */
-        private const val KEEP_OPEN_MS = 60_000L
         private const val PREFETCH_EVERY_MS = 5 * 60_000L
 
         /** "On Sun, 11 Oct 2026 at 07:42, Priya <priya@x.com> wrote:" and the email, each line starting with ">". */

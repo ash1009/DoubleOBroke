@@ -245,28 +245,18 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Changes emails on the mail server and on the list, then offers Undo, which puts them back as
-     * they were. [before] and [after] hold the same entries.
+     * Changes emails on the list straight away and offers Undo, which puts them back as they were; the
+     * mail server catches up behind (even if you leave the screen). If it can't be reached, the list goes
+     * back and you're told. [before] and [after] hold the same entries.
      */
     private fun change(before: List<MailLogEntity>, after: List<MailLogEntity>, message: String?, all: Boolean = false) {
         if (after.isEmpty()) return
-        viewModelScope.launch {
-            if (all) _markingAll.value = true
-            val ok = try {
-                busy(after.map { it.id }) { inbox.change(after) }
-            } finally {
-                if (all) _markingAll.value = false
-            }
-            if (!ok) {
-                agent.note("Couldn't reach your email, so some weren't changed. Check your connection and try again.")
-                return@launch
-            }
-            if (message != null) {
-                _done.tryEmit(Done(message) {
-                    viewModelScope.launch { busy(before.map { it.id }) { inbox.change(before) } }
-                })
-            }
+        if (all) _markingAll.value = true
+        inbox.changeNow(after) { ok ->
+            if (all) _markingAll.value = false
+            if (!ok) agent.note("Couldn't reach your email, so some weren't changed. Check your connection and try again.")
         }
+        if (message != null) _done.tryEmit(Done(message) { change(after, before, null) })
     }
 
     fun markRead(entry: MailLogEntity) =
@@ -362,7 +352,7 @@ class MailViewModel(application: Application) : AndroidViewModel(application) {
         val what = if (r.count == 0) "$who isn't important now" else "$who isn't important now: ${count(r.count, "email")} marked read"
         _done.tryEmit(Done(what) {
             inbox.unquietSender(entry.fromAddress)
-            viewModelScope.launch { busy(r.before.map { it.id }) { inbox.change(r.before) } }
+            inbox.changeNow(r.before)
         })
     }
 

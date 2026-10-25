@@ -11,7 +11,9 @@ import androidx.work.WorkerParameters
 import app.brokeometer.BrokeApp
 import app.brokeometer.data.Prefs
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -44,9 +46,17 @@ class InboxAgent(
     private val onTold: (Long) -> Unit = {},
     /** Where tasks found in emails go (Tasks), if anywhere. */
     private val tasks: TaskSink? = null,
+    /** The open connections shared with reading, so your changes don't sign in each time. */
+    private val sessions: MailSessions? = null,
     private val client: MailClient = MailClient(),
 ) {
-    private val lock = Mutex()
+    /** New emails: one check goes through an account's at a time. */
+    private val newLocks = java.util.concurrent.ConcurrentHashMap<Long, Mutex>()
+    private fun newLock(accountId: Long): Mutex = newLocks.getOrPut(accountId) { Mutex() }
+    /** The slow parts of a check (emails the AI couldn't sort yet, matching the email app, spam), apart from new emails. */
+    private val slowLock = Mutex()
+    /** So an email with a code is only ever told about once. */
+    private val codeLock = Mutex()
 
     /** Turns the agent on or off. Turning it on starts from now: older email is never touched. */
     suspend fun setOn(on: Boolean) {
@@ -131,27 +141,28 @@ class InboxAgent(
     private suspend fun takeOverTurn() {
         val first = waiting()
         if (first.isEmpty()) return
-        lock.withLock {
-            first.flatMap { accountsFor(it.alert) }.distinctBy { it.id }.forEach { inbox(it) }
-            clearAppAlerts()
-        }
+        newOnly(first.flatMap { accountsFor(it.alert) }.distinctBy { it.id })
+        clearAppAlerts()
         if (waiting().isEmpty()) return
         // The email app can be a moment ahead of the mail server.
         delay(ALERT_GRACE_MS)
-        lock.withLock {
-            val left = waiting()
-            left.flatMap { accountsFor(it.alert) }.distinctBy { it.id }.forEach { inbox(it) }
-            clearAppAlerts()
-            // Still not in the mailbox: told from the email app's own notification, so it isn't missed.
-            val now = System.currentTimeMillis()
-            val stale = waiting().filter { now - it.at >= ALERT_GRACE_MS }
-            stale.forEach {
-                notifier.unchecked(it.alert)
-                repository.log(it.alert.packageName, it.alert.title, "", "Email: not in the mailbox yet, so you were told from the email app's notification")
-            }
-            synchronized(waitingAlerts) { waitingAlerts.removeAll { w -> stale.any { it.alert.key == w.alert.key } } }
-            synchronized(uncheckedShown) { uncheckedShown += stale }
+        val left = waiting()
+        newOnly(left.flatMap { accountsFor(it.alert) }.distinctBy { it.id })
+        clearAppAlerts()
+        // Still not in the mailbox: told from the email app's own notification, so it isn't missed.
+        val now = System.currentTimeMillis()
+        val stale = waiting().filter { now - it.at >= ALERT_GRACE_MS }
+        stale.forEach {
+            notifier.unchecked(it.alert)
+            repository.log(it.alert.packageName, it.alert.title, "", "Email: not in the mailbox yet, so you were told from the email app's notification")
         }
+        synchronized(waitingAlerts) { waitingAlerts.removeAll { w -> stale.any { it.alert.key == w.alert.key } } }
+        synchronized(uncheckedShown) { uncheckedShown += stale }
+    }
+
+    /** Just the new emails of these accounts, all at once: nothing slow, so a code reaches you in seconds. */
+    private suspend fun newOnly(accounts: List<MailAccountEntity>) = coroutineScope {
+        accounts.forEach { a -> launch { inbox(a, quick = true) } }
     }
 
     /**
@@ -186,13 +197,11 @@ class InboxAgent(
      */
     suspend fun checkAll(inbox: Boolean = true, spam: Boolean = true, matchNow: Boolean = false) {
         if (!prefs.mailAgentOn.value) return
-        lock.withLock {
-            for (account in dao.accounts()) {
-                if (inbox) inbox(account, matchNow)
-                if (spam) spam(account)
-            }
-            clearAppAlerts()
+        for (account in dao.accounts()) {
+            if (inbox) inbox(account, matchNow)
+            if (spam) slowLock.withLock { spam(account) }
         }
+        clearAppAlerts()
     }
 
     /**
@@ -201,12 +210,10 @@ class InboxAgent(
      */
     suspend fun checkInbox(accountId: Long?) {
         if (!prefs.mailAgentOn.value) return
-        lock.withLock {
-            for (account in dao.accounts()) {
-                if (accountId == null || account.id == accountId) inbox(account, matchNow = true)
-            }
-            clearAppAlerts()
+        for (account in dao.accounts()) {
+            if (accountId == null || account.id == accountId) inbox(account, matchNow = true)
         }
+        clearAppAlerts()
     }
 
     /**
@@ -233,53 +240,48 @@ class InboxAgent(
      * The inbox: every new email goes into the list, and the AI's answer decides what happens to it.
      * Nothing stops at one email: one the AI can't decide on is listed as undecided (left unread with its
      * notification) and the rest carry on; it is tried again on later checks for [UNDECIDED_RETRY_MS].
+     * [quick] is for a new email the email app just told about: only new emails, none of the slow parts.
      */
-    private suspend fun inbox(account: MailAccountEntity, matchNow: Boolean = false): List<MailItem> = withContext(Dispatchers.IO) {
+    private suspend fun inbox(account: MailAccountEntity, matchNow: Boolean = false, quick: Boolean = false): List<MailItem> = withContext(Dispatchers.IO) {
         val password = prefs.mailPassword(account.address)
         if (password.isEmpty()) return@withContext emptyList()
         val categories = dao.categories()
         if (categories.isEmpty()) return@withContext emptyList()
         val handled = ArrayList<MailItem>()
         try {
-            client.session(mail.server(account), account.address, password, account.provider, background = true).use { s ->
+            // A new email the email app told about doesn't queue behind other mailbox work for long.
+            client.session(mail.server(account), account.address, password, account.provider, background = !quick).use { s ->
                 // Signed in: an old warning about this account no longer applies.
                 mail.clearNoteAbout(account.address)
-                val cursor = dao.cursor(account.id, MailFolders.INBOX)
-                var (items, next) = s.newSince(MailFolders.INBOX, cursor?.uidValidity, cursor?.lastUid, MAX_PER_CHECK)
-                    ?: return@withContext emptyList()
-                if (cursor == null || cursor.uidValidity != next.first) {
-                    // First look at this inbox: start from now.
-                    dao.saveCursor(MailCursorEntity(account.id, MailFolders.INBOX, next.first, next.second))
-                    return@withContext emptyList()
-                }
-                // Emails the AI couldn't decide on before get another go first.
-                retryUndecided(account, s, categories, handled)
-                var lastDone = cursor.lastUid
-                var batches = 0
-                while (true) {
-                    for (item in items.sortedBy { it.uid }) {
-                        if (handleInboxItem(account, s, item, categories, retry = null)) handled += item
-                        // Saved after each email, so a check cut short never loses one.
-                        lastDone = item.uid
-                        dao.saveCursor(MailCursorEntity(account.id, MailFolders.INBOX, next.first, lastDone))
+                val lock = newLock(account.id)
+                if (!lock.tryLock()) {
+                    // Another check has the new emails (it may be waiting on the AI): codes can't wait for it.
+                    try {
+                        tellCodes(account, s, categories)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        // The check that has them tells you.
                     }
-                    if (items.isEmpty()) {
-                        lastDone = maxOf(lastDone, next.second)
-                        dao.saveCursor(MailCursorEntity(account.id, MailFolders.INBOX, next.first, lastDone))
-                        break
-                    }
-                    batches++
-                    if (items.size < MAX_PER_CHECK || batches >= MAX_BATCHES) break
-                    val more = s.newSince(MailFolders.INBOX, next.first, lastDone, MAX_PER_CHECK) ?: break
-                    items = more.first
-                    next = more.second
+                    lock.lock()
                 }
                 try {
-                    matchEmailApp(account, s, matchNow)
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    // Tried again on the next check.
+                    newMail(account, s, categories, handled)
+                } finally {
+                    lock.unlock()
+                }
+                if (!quick) {
+                    slowLock.withLock {
+                        // Emails the AI couldn't decide on before get another go, after the new ones.
+                        retryUndecided(account, s, categories, handled)
+                        try {
+                            matchEmailApp(account, s, matchNow)
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            // Tried again on the next check.
+                        }
+                    }
                 }
             }
         } catch (e: MailClient.LoginRefused) {
@@ -297,6 +299,55 @@ class InboxAgent(
         }
         dao.trimLog()
         handled
+    }
+
+    /**
+     * Emails that came in since the last check, oldest first, each saved as done so a check cut short
+     * never loses one. Ones with a code go first, so they never wait while the AI looks at the others.
+     */
+    private suspend fun newMail(account: MailAccountEntity, s: MailSession, categories: List<MailCategoryEntity>, handled: MutableList<MailItem>) {
+        val cursor = dao.cursor(account.id, MailFolders.INBOX)
+        var (items, next) = s.newSince(MailFolders.INBOX, cursor?.uidValidity, cursor?.lastUid, MAX_PER_CHECK) ?: return
+        if (cursor == null || cursor.uidValidity != next.first) {
+            // First look at this inbox: start from now.
+            dao.saveCursor(MailCursorEntity(account.id, MailFolders.INBOX, next.first, next.second))
+            return
+        }
+        var lastDone = cursor.lastUid
+        var batches = 0
+        while (true) {
+            val ordered = items.sortedBy { it.uid }
+            val codes = ordered.filter { MailCodes.find(it.subject, it.text) != null }.map { it.uid }.toSet()
+            for (item in ordered) if (item.uid in codes && handleInboxItem(account, s, item, categories, retry = null)) handled += item
+            for (item in ordered) {
+                if (item.uid !in codes && handleInboxItem(account, s, item, categories, retry = null)) handled += item
+                lastDone = item.uid
+                dao.saveCursor(MailCursorEntity(account.id, MailFolders.INBOX, next.first, lastDone))
+            }
+            if (items.isEmpty()) {
+                lastDone = maxOf(lastDone, next.second)
+                dao.saveCursor(MailCursorEntity(account.id, MailFolders.INBOX, next.first, lastDone))
+                break
+            }
+            batches++
+            if (items.size < MAX_PER_CHECK || batches >= MAX_BATCHES) break
+            val more = s.newSince(MailFolders.INBOX, next.first, lastDone, MAX_PER_CHECK) ?: break
+            items = more.first
+            next = more.second
+        }
+    }
+
+    /**
+     * New emails with a code, told about straight away while another check has the new emails. The
+     * check that has them sees they were told about and leaves them.
+     */
+    private suspend fun tellCodes(account: MailAccountEntity, s: MailSession, categories: List<MailCategoryEntity>) {
+        val cursor = dao.cursor(account.id, MailFolders.INBOX) ?: return
+        val (items, next) = s.newSince(MailFolders.INBOX, cursor.uidValidity, cursor.lastUid, MAX_PER_CHECK) ?: return
+        if (next.first != cursor.uidValidity) return
+        for (item in items.sortedBy { it.uid }) {
+            if (!item.seen && MailCodes.find(item.subject, item.text) != null) handleInboxItem(account, s, item, categories, retry = null)
+        }
     }
 
     /** Inbox emails the AI couldn't decide on: asked again while they're still unread in the inbox. */
@@ -378,12 +429,16 @@ class InboxAgent(
         }
         val code = MailCodes.find(item.subject, item.text)
         if (code != null) {
-            // A code (OTP) always notifies, at once and with no AI, whatever its kind.
-            val usual = dao.sender(account.id, item.fromAddress)?.categoryId?.let { id -> categories.firstOrNull { it.id == id } }
-            val row = entry(usual, MailActions.NOTIFIED, "Has a code, so you were told straight away.")
-            val id = save(row)
-            notifier.important(row.copy(id = id), account, code)
-            onTold(id)
+            // A code (OTP) always notifies, at once and with no AI, whatever its kind. Once only, even
+            // when two checks have it at the same time.
+            codeLock.withLock {
+                if (retry == null && item.messageId != null && dao.handledCount(item.messageId) > 0) return true
+                val usual = dao.sender(account.id, item.fromAddress)?.categoryId?.let { id -> categories.firstOrNull { it.id == id } }
+                val row = entry(usual, MailActions.NOTIFIED, "Has a code, so you were told straight away.")
+                val id = save(row)
+                notifier.important(row.copy(id = id), account, code)
+                onTold(id)
+            }
             return true
         }
         if (item.fromAddress.isNotEmpty() && item.fromAddress.lowercase() in prefs.quietSenders.value) {
@@ -732,7 +787,7 @@ class InboxAgent(
      * and archived; kinds switched on, and anything unclear, are left unread. No notifications, since
      * these are old. Every email is listed under Activity, archived ones with an Undo.
      */
-    suspend fun tidy(): Unit = lock.withLock {
+    suspend fun tidy(): Unit = slowLock.withLock {
         withContext(Dispatchers.IO) {
             val categories = dao.categories()
             if (categories.isEmpty()) {
@@ -750,7 +805,8 @@ class InboxAgent(
                 val password = prefs.mailPassword(account.address)
                 if (password.isEmpty()) continue
                 try {
-                    client.session(mail.server(account), account.address, password, account.provider).use { s ->
+                    // New emails wait while this account is tidied, so none is dealt with twice.
+                    newLock(account.id).withLock { client.session(mail.server(account), account.address, password, account.provider).use { s ->
                         mail.report(MailProgress(MailProgress.Stage.TIDYING, account.address, 0, 0, "Finding unread emails"))
                         val uids = s.unreadInbox()
                         var done = 0
@@ -805,7 +861,7 @@ class InboxAgent(
                             }
                             done += chunk.size
                         }
-                    }
+                    } }
                 } catch (e: MailClient.MailError) {
                     problems += "${account.address}: ${e.message}"
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -869,27 +925,92 @@ class InboxAgent(
     }
 
     /** The notification's Mark read button. The email stays in the inbox. */
-    suspend fun markRead(logId: Long): Boolean {
-        val log = dao.log(logId) ?: return false
-        return change(listOf(log.copy(action = MailActions.MARKED_READ, undone = false)))
+    suspend fun markRead(logId: Long) {
+        val log = dao.log(logId) ?: return
+        changeNow(listOf(log.copy(action = MailActions.MARKED_READ, undone = false)))
+    }
+
+    /** The notification's Archive button. */
+    suspend fun archive(logId: Long) {
+        val log = dao.log(logId) ?: return
+        changeNow(listOf(log.copy(action = MailActions.ARCHIVED, undone = false)))
+    }
+
+    /** A change on its way to the mailbox, after the list already shows it. */
+    private class Pending(val targets: List<MailLogEntity>, val from: List<MailLogEntity>, val onDone: (Boolean) -> Unit)
+
+    private val pending = Channel<Pending>(Channel.UNLIMITED)
+    private val showLock = Mutex()
+
+    init {
+        // Changes reach the mailbox in the order you made them (so Undo always comes after what it undoes).
+        scope.launch {
+            for (p in pending) {
+                val ok = try {
+                    change(p.targets, from = p.from)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    false
+                }
+                if (!ok) putBack(p.targets, p.from)
+                runCatching { p.onDone(ok) }
+            }
+        }
     }
 
     /**
-     * Puts emails into the states asked for: read, unread, archived, or back in the inbox. The mail
-     * server changes first, then the Activity list, which keeps the AI's line about each email. Passing
-     * the entries as they were undoes a change. An email no longer where it was (deleted or moved in the
-     * email app) only changes on the list. False when an account could not be reached.
+     * Read, unread, archived or deleted, shown on the list straight away; the mailbox catches up behind it,
+     * even if you leave the screen. When the mailbox can't be reached, the list goes back as it was and
+     * [onDone] gets false.
      */
-    suspend fun change(targets: List<MailLogEntity>): Boolean = withContext(Dispatchers.IO) {
+    fun changeNow(targets: List<MailLogEntity>, onDone: (Boolean) -> Unit = {}) {
+        if (targets.isEmpty()) return
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            showLock.withLock {
+                val now = targets.map { it.id }.chunked(500).flatMap { dao.logs(it) }
+                for (t in targets) {
+                    dao.setLogState(t.id, t.action, t.undone)
+                    if (!MailActions.leftUnread(t)) notifier.cancel(t.id)
+                }
+                pending.send(Pending(targets, now, onDone))
+            }
+        }
+    }
+
+    /** A change that didn't reach the mailbox: the list goes back, except where you changed it again since. */
+    private suspend fun putBack(targets: List<MailLogEntity>, was: List<MailLogEntity>) {
+        val now = targets.map { it.id }.chunked(500).flatMap { dao.logs(it) }.associateBy { it.id }
+        val old = was.associateBy { it.id }
+        for (t in targets) {
+            val n = now[t.id] ?: continue
+            val o = old[t.id] ?: continue
+            if (n.action == t.action && n.undone == t.undone) dao.setLogState(o.id, o.action, o.undone)
+        }
+    }
+
+    /** Runs [block] on a connection to [account]: the open one shared with reading, when there is one. */
+    private suspend fun <T> withAccount(account: MailAccountEntity, block: suspend (MailSession) -> T): T {
+        val shared = sessions
+        if (shared != null) return shared.use(account, block)
+        return client.session(mail.server(account), account.address, prefs.mailPassword(account.address), account.provider).use { block(it) }
+    }
+
+    /**
+     * Puts emails into the states asked for: read, unread, archived, or back in the inbox, going from
+     * [from] (or the list as it is now). Passing the entries as they were undoes a change. An email no
+     * longer where it was (deleted or moved in the email app) only changes on the list. False when an
+     * account could not be reached.
+     */
+    suspend fun change(targets: List<MailLogEntity>, from: List<MailLogEntity>? = null): Boolean = withContext(Dispatchers.IO) {
         if (targets.isEmpty()) return@withContext true
-        val current = targets.map { it.id }.chunked(500).flatMap { dao.logs(it) }.associateBy { it.id }
+        val current = (from ?: targets.map { it.id }.chunked(500).flatMap { dao.logs(it) }).associateBy { it.id }
         var ok = true
         for ((accountId, list) in targets.groupBy { it.accountId }) {
             try {
                 val account = dao.account(accountId)
                 if (account != null) {
-                    val password = prefs.mailPassword(account.address)
-                    client.session(mail.server(account), account.address, password, account.provider).use { s ->
+                    withAccount(account) { s ->
                         val read = ArrayList<MailLogEntity>()
                         val unread = ArrayList<MailLogEntity>()
                         for (target in list) {
@@ -921,14 +1042,17 @@ class InboxAgent(
                                 !MailActions.leftUnread(now) && MailActions.leftUnread(target) -> unread += now
                             }
                         }
-                        if (read.isNotEmpty()) s.setSeenInbox(uidsOf(read), idsOf(read), true)
-                        if (unread.isNotEmpty()) s.setSeenInbox(uidsOf(unread), idsOf(unread), false)
+                        if (read.isNotEmpty()) s.setSeen(seenKeys(read), true)
+                        if (unread.isNotEmpty()) s.setSeen(seenKeys(unread), false)
                     }
                 }
-                // An account removed since has nothing left to change, so only the list changes.
-                for (target in list) {
-                    dao.setLogState(target.id, target.action, target.undone)
-                    if (!MailActions.leftUnread(target)) notifier.cancel(target.id)
+                // An account removed since has nothing left to change, so only the list changes. (A change
+                // shown already with changeNow is on the list.)
+                if (from == null) {
+                    for (target in list) {
+                        dao.setLogState(target.id, target.action, target.undone)
+                        if (!MailActions.leftUnread(target)) notifier.cancel(target.id)
+                    }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -941,9 +1065,9 @@ class InboxAgent(
     }
 
     /** Found by UID only when there is no Message-ID; a UID changes when an email moves. */
-    private fun uidsOf(list: List<MailLogEntity>) = list.filter { it.messageId == null && it.folder == MailFolders.INBOX }.map { it.uid }
-
-    private fun idsOf(list: List<MailLogEntity>) = list.mapNotNull { it.messageId }
+    /** Each email's inbox UID as the app noted it (when it came into the inbox), and its Message-ID. */
+    private fun seenKeys(list: List<MailLogEntity>): List<Pair<Long?, String?>> =
+        list.map { (if (it.folder == MailFolders.INBOX && !it.undone) it.uid else null) to it.messageId }
 
     /** What "sender not important" did, and how to put it back. */
     data class Quieted(val count: Int, val failed: Boolean, val before: List<MailLogEntity>)
@@ -1005,10 +1129,6 @@ class InboxAgent(
         if (on) prefs.setQuietSender(address, false)
     }
 
-    suspend fun archive(logId: Long) = act(logId) { s, log ->
-        s.archive(log.uid).also { if (it) dao.setLogAction(log.id, MailActions.ARCHIVED) }
-    }
-
     /** Puts an archived email back in the inbox, or a binned one back out of the bin. */
     suspend fun undo(logId: Long) = act(logId) { s, log ->
         val id = log.messageId ?: return@act false
@@ -1025,9 +1145,10 @@ class InboxAgent(
         withContext(Dispatchers.IO) {
             val log = dao.log(logId) ?: return@withContext false
             val account = dao.account(log.accountId) ?: return@withContext false
-            val password = prefs.mailPassword(account.address)
             try {
-                client.session(mail.server(account), account.address, password, account.provider).use { block(it, log) }
+                withAccount(account) { block(it, log) }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 false
             }
