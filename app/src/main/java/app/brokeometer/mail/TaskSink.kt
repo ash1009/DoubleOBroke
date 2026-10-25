@@ -7,4 +7,7 @@ interface TaskSink {
 
     /** A task found in a new email, with the email's list entry. */
     fun fromEmail(accountId: Long, logId: Long, item: MailItem, task: MailPrompts.TaskHint)
+
+    /** A new email dealt with without the AI: Tasks asks about it on its own. */
+    fun checkEmail(accountId: Long, logId: Long, item: MailItem)
 }

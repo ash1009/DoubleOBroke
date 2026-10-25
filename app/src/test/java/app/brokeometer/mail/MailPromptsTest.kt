@@ -139,6 +139,19 @@ class MailPromptsTest {
     }
 
     @Test
+    fun aTimeLimitIsCountedFromTheDayTheEmailCame() {
+        val came = java.time.LocalDate.of(2026, 10, 20)
+        // "Finish within 10 days, ideally within 3": the AI gives the sooner one, the app counts it.
+        val soon = MailPrompts.parseTask(org.json.JSONObject("""{"what":"Finish the EY test","day":"","in_days":3,"time":""}"""))!!
+        assertEquals(java.time.LocalDate.of(2026, 10, 23), soon.dueDay(came))
+        // 72 hours written as 3.0, and a fixed date wins over a count.
+        assertEquals(3, MailPrompts.parseTask(org.json.JSONObject("""{"what":"Do the test","in_days":"3.0"}"""))!!.inDays)
+        assertEquals(java.time.LocalDate.of(2026, 11, 1), MailPrompts.parseTask(org.json.JSONObject("""{"what":"Pay","day":"2026-11-01","in_days":5}"""))!!.dueDay(came))
+        assertNull(MailPrompts.parseTask(org.json.JSONObject("""{"what":"Reply","day":"","in_days":null}""")))
+        assertTrue(MailPrompts.TASK_RULE.contains("\"in_days\": 3"))
+    }
+
+    @Test
     fun spamAnswersLeanTowardsKeeping() {
         assertTrue(MailPrompts.checkSpam(item).startsWith("This email is in the spam folder"))
         assertEquals(MailPrompts.SpamVerdict(true, "Scam"), MailPrompts.parseSpam("""{"spam":true,"why":"Scam"}"""))

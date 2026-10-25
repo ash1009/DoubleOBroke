@@ -143,16 +143,33 @@ class TaskAgent(
 
     override fun wantsEmailTasks(): Boolean = _fromEmail.value
 
+    /**
+     * An email the agent dealt with without asking the AI (one you'd already read, or from a sender you
+     * said isn't important): asked about on its own, so every email is looked at for tasks.
+     */
+    override fun checkEmail(accountId: Long, logId: Long, item: MailItem) {
+        if (!_fromEmail.value) return
+        scope.launch {
+            val answer = mail.askText(TaskPrompts.SYSTEM, TaskPrompts.emails(listOf(item), LocalDate.now()), 500) ?: return@launch
+            val task = TaskPrompts.parse(answer, 1).firstOrNull()?.task ?: return@launch
+            if (keepFromEmail(accountId, logId, item, task)) check()
+        }
+    }
+
     override fun fromEmail(accountId: Long, logId: Long, item: MailItem, task: MailPrompts.TaskHint) {
         scope.launch {
             if (keepFromEmail(accountId, logId, item, task)) check()
         }
     }
 
+    /**
+     * The email's task, its day worked out from the day the email came when it's a time limit. One task
+     * per email, so finding it again (on the look back, say) never adds it twice.
+     */
     private suspend fun keepFromEmail(accountId: Long, logId: Long?, item: MailItem, task: MailPrompts.TaskHint): Boolean {
-        val day = TaskRules.day(task.day) ?: return false
-        if (day.isBefore(LocalDate.now())) return false
-        val key = "$accountId:${item.messageId ?: "uid${item.uid}"}:${TaskRules.keyOf(task.what)}"
+        val came = Instant.ofEpochMilli(item.receivedAt).atZone(ZoneId.systemDefault()).toLocalDate()
+        val day = task.dueDay(came) ?: return false
+        val key = "$accountId:${item.messageId ?: "uid${item.uid}"}"
         val from = item.fromName.ifBlank { item.fromAddress }
         return lock.withLock {
             dao.insert(
@@ -178,10 +195,16 @@ class TaskAgent(
      */
     fun lookBackOnce(again: Boolean = false) {
         if (!_fromEmail.value || _lookingBack.value) return
-        if (!again && sp.getBoolean(KEY_LOOKED_BACK, false)) return
+        val version = sp.getInt(KEY_LOOKED_BACK_VERSION, 0)
+        if (!again && sp.getBoolean(KEY_LOOKED_BACK, false) && version >= LOOK_BACK_VERSION) return
         scope.launch {
             _lookingBack.value = true
             try {
+                // Read with older rules: what it found is found again, the new way.
+                if (version < LOOK_BACK_VERSION) {
+                    lock.withLock { dao.bySource(TaskSource.EMAIL).filter { !it.done && !it.dismissed }.forEach { dao.delete(it.id) } }
+                    sp.edit().putInt(KEY_LOOKED_BACK_VERSION, LOOK_BACK_VERSION).apply()
+                }
                 lookBack()
             } finally {
                 _lookingBack.value = false
@@ -202,7 +225,7 @@ class TaskAgent(
                 emptyList()
             }
             for (batch in items.chunked(BATCH)) {
-                val answer = mail.askText(TaskPrompts.SYSTEM, TaskPrompts.emails(batch, today), 1200)
+                val answer = mail.askText(TaskPrompts.SYSTEM, TaskPrompts.emails(batch, today), 1500)
                 if (answer == null) {
                     failed = true
                     break
@@ -250,17 +273,18 @@ class TaskAgent(
         if (!_fromNotes.value) return
         scope.launch {
             val words = (title + "\n" + text).trim()
-            val found: List<MailPrompts.TaskHint> = if (words.length < 6) emptyList() else {
-                val answer = mail.askText(TaskPrompts.SYSTEM, TaskPrompts.note(title, text, LocalDate.now()), 600) ?: return@launch
-                TaskPrompts.parse(answer).map { it.task }.filter { TaskRules.day(it.day)?.isBefore(LocalDate.now()) == false }
+            val today = LocalDate.now()
+            val found: List<Pair<MailPrompts.TaskHint, LocalDate>> = if (words.length < 6) emptyList() else {
+                val answer = mail.askText(TaskPrompts.SYSTEM, TaskPrompts.note(title, text, today), 600) ?: return@launch
+                TaskPrompts.parse(answer).mapNotNull { f -> f.task.dueDay(today)?.takeIf { !it.isBefore(today) }?.let { f.task to it } }
             }
             lock.withLock {
-                val keys = found.map { "note:$noteId:${TaskRules.keyOf(it.what)}" }.toSet()
+                val keys = found.map { "note:$noteId:${TaskRules.keyOf(it.first.what)}" }.toSet()
                 dao.byRef(listOf(TaskSource.NOTE), noteId).filter { !it.done && it.sourceKey !in keys }.forEach { dao.delete(it.id) }
-                found.forEach { t ->
+                found.forEach { (t, day) ->
                     dao.insert(
                         TaskEntity(
-                            title = t.what, detail = title.take(120), day = t.day, time = TaskRules.time(t.time), source = TaskSource.NOTE,
+                            title = t.what, detail = title.take(120), day = day.toString(), time = TaskRules.time(t.time), source = TaskSource.NOTE,
                             sourceKey = "note:$noteId:${TaskRules.keyOf(t.what)}", ref = noteId, createdAt = System.currentTimeMillis(),
                         ),
                     )
@@ -280,8 +304,9 @@ class TaskAgent(
     // From the calendar
 
     /**
-     * The phone's calendars for the next [TaskRules.CALENDAR_DAYS] days, read on the phone: new events are
-     * added, moved ones follow, and ones taken off the calendar go. Holidays and birthdays are left out.
+     * Events you added to your own calendar, for the next [TaskRules.CALENDAR_DAYS] days, read on the
+     * phone: new ones are added, moved ones follow, and ones taken off the calendar go. Holidays,
+     * birthdays, calendars you follow and invitations from others are left out.
      */
     suspend fun syncCalendar() {
         if (!_fromCalendar.value || !canReadCalendar()) return
@@ -321,14 +346,20 @@ class TaskAgent(
             CalendarContract.Instances.OWNER_ACCOUNT,
             CalendarContract.Instances.SELF_ATTENDEE_STATUS,
             CalendarContract.Instances.VISIBLE,
+            CalendarContract.Instances.CALENDAR_ACCESS_LEVEL,
+            CalendarContract.Instances.ORGANIZER,
         )
         val out = ArrayList<CalendarEvent>()
         CalendarContract.Instances.query(context.contentResolver, projection, start, end)?.use { c ->
             while (c.moveToNext()) {
                 val owner = c.getString(5).orEmpty()
-                // Public holidays and contacts' birthdays aren't things to do.
+                // Only events you put in your own calendar: not holidays, birthdays, or calendars you
+                // follow (like a sports one), and not invitations from others.
                 if ("#holiday" in owner || "#contacts" in owner) continue
                 if (c.getInt(7) == 0) continue
+                if (c.getInt(8) < CalendarContract.Calendars.CAL_ACCESS_OWNER) continue
+                val organizer = c.getString(9).orEmpty().trim()
+                if (organizer.isNotEmpty() && !organizer.equals(owner, ignoreCase = true)) continue
                 if (c.getInt(6) == CalendarContract.Attendees.ATTENDEE_STATUS_DECLINED) continue
                 val title = c.getString(1)?.trim().orEmpty().ifEmpty { "(No title)" }
                 val begin = c.getLong(2)
@@ -448,8 +479,12 @@ class TaskAgent(
         const val CHANNEL = "tasks"
         private const val SUMMARY_ID = 7100
         private const val TASK_ID_BASE = 7200
-        private const val BATCH = 15
-        private const val LOOK_BACK_MAX = 200
+        /** Emails per question on the look back: each goes in whole (as far as the agent reads one). */
+        private const val BATCH = 5
+        private const val LOOK_BACK_MAX = 600
+        /** The look back runs again when its rules change. */
+        private const val LOOK_BACK_VERSION = 2
+        private const val KEY_LOOKED_BACK_VERSION = "looked_back_version"
         private const val KEEP_DONE_MS = 90L * 24 * 60 * 60_000L
         private const val KEY_EMAIL = "from_email"
         private const val KEY_CALENDAR = "from_calendar"

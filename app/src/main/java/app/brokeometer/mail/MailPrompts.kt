@@ -187,16 +187,30 @@ object MailPrompts {
         }
     }
 
-    /** What makes something in an email or a note a task, and how to write it. */
+    /**
+     * What makes something in an email a task, and how to write its day: a fixed date as it is, a time
+     * limit as days from the day the email came (worked out by the app, not the AI), the sooner of two
+     * limits, and three days for a test or form with no date at all.
+     */
     const val TASK_RULE =
-        "If it gives the person something they must do or go to on or by a date (a deadline, an interview, an assessment or " +
-            "form to finish, a bill or payment due, an appointment, a booking, a delivery to be in for), add " +
-            "\"task\": {\"what\":\"under 10 words, starting with a verb\",\"day\":\"YYYY-MM-DD\",\"time\":\"HH:MM, or empty\"}, " +
-            "using the day it is due or happens. Otherwise \"task\" is null: for offers, sales, newsletters, receipts, events " +
-            "they didn't sign up for, anything already past, and anything with no date."
+        "If it gives the person something they must do or go to (a job application test, online assessment, video interview, " +
+            "form to finish, an interview, a bill or payment due, an appointment, a booking, a delivery to be in for), add " +
+            "\"task\": {\"what\":\"under 10 words, starting with a verb\",\"day\":\"YYYY-MM-DD, or empty\",\"in_days\":null,\"time\":\"HH:MM, or empty\"}. " +
+            "A fixed date goes in \"day\". A time limit such as \"within 5 days\" or \"in the next 72 hours\" goes in \"in_days\" as a whole " +
+            "number of days counted from the day the email came, with \"day\" empty. When it gives a limit and also a sooner one it suggests " +
+            "(\"within 10 days, ideally within 3\"), use the sooner one. A test, assessment or form to complete with no date or limit at all " +
+            "gets \"in_days\": 3. Otherwise \"task\" is null: for offers, sales, newsletters, receipts, events they didn't sign up for, and " +
+            "anything else with no date."
 
-    /** Something to do or go to, as the AI wrote it: [day] is "YYYY-MM-DD", [time] "HH:MM" or null. */
-    data class TaskHint(val what: String, val day: String, val time: String? = null)
+    /**
+     * Something to do or go to, as the AI wrote it: [day] is "YYYY-MM-DD", or [inDays] counts days from the
+     * day the email came; [time] is "HH:MM" or null.
+     */
+    data class TaskHint(val what: String, val day: String?, val time: String? = null, val inDays: Int? = null) {
+        /** The day it's due, for an email that came on [came]. */
+        fun dueDay(came: java.time.LocalDate): java.time.LocalDate? =
+            app.brokeometer.tasks.TaskRules.day(day) ?: inDays?.let { came.plusDays(it.toLong()) }
+    }
 
     data class Decision(val category: Int, val summary: String, val personal: Boolean = false, val task: TaskHint? = null)
 
@@ -207,15 +221,18 @@ object MailPrompts {
         return Decision(c, root.optString("summary").trim().take(120), root.optBoolean("personal", false), parseTask(root.optJSONObject("task")))
     }
 
-    /** A task the AI wrote, when it has words and a real day. */
+    /** A task the AI wrote, when it has words and a real day, or a number of days to count. */
     fun parseTask(o: JSONObject?): TaskHint? {
         if (o == null) return null
         val what = o.optString("what").trim().take(120)
-        val day = o.optString("day").trim()
-        if (what.isEmpty() || app.brokeometer.tasks.TaskRules.day(day) == null) return null
+        val day = o.optString("day").trim().takeIf { app.brokeometer.tasks.TaskRules.day(it) != null }
+        val inDays = if (o.isNull("in_days")) null else o.optString("in_days").trim().toDoubleOrNull()?.let { kotlin.math.ceil(it).toInt() }?.takeIf { it in 0..MAX_IN_DAYS }
+        if (what.isEmpty() || (day == null && inDays == null)) return null
         val time = o.optString("time").trim().takeIf { app.brokeometer.tasks.TaskRules.time(it) != null }
-        return TaskHint(what, day, time)
+        return TaskHint(what, day, time, if (day == null) inDays else null)
     }
+
+    private const val MAX_IN_DAYS = 120
 
     /** The emails a tidy-up answer marked as personal ("p": ["s1", "s4"]). */
     fun parsePersonal(text: String, emails: Int): Set<Int> {

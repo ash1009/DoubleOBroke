@@ -401,8 +401,13 @@ private fun TasksSetupPage(vm: TasksViewModel, listState: LazyListState) {
         item("from") {
             PageCard {
                 CardHead("Where tasks come from", "Ones you add yourself always show.")
-                SetupSwitch("Emails", "As each email comes in, the AI picks out deadlines, interviews, bills and bookings.", fromEmail) { vm.setFromEmail(it) }
-                SetupSwitch("Calendar", "Your phone's calendars, read on the phone only. Holidays and birthdays are left out.", fromCalendar) { on ->
+                SetupSwitch(
+                    "Emails",
+                    "Every email is read for tests, assessments, interviews, deadlines and bills. \"Within 5 days\" counts from the day the email came, " +
+                        "the sooner of two limits is used, and a test with no date gets 3 days.",
+                    fromEmail,
+                ) { vm.setFromEmail(it) }
+                SetupSwitch("Calendar", "Only events you add to your own calendar, read on the phone. Birthdays, holidays, calendars you follow and invitations are left out.", fromCalendar) { on ->
                     if (!on) vm.setFromCalendar(false)
                     else if (vm.canReadCalendar()) vm.setFromCalendar(true)
                     else askCalendar.launch(Manifest.permission.READ_CALENDAR)

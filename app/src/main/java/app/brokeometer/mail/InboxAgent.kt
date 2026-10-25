@@ -370,8 +370,10 @@ class InboxAgent(
             if (waiting != null) notifier.cancel(waiting.id)
         }
         if (item.seen) {
-            save(entry(null, MailActions.READ_ELSEWHERE, "You had already read it, so it was left as it was."))
+            val id = save(entry(null, MailActions.READ_ELSEWHERE, "You had already read it, so it was left as it was."))
             sortedNow()
+            // Read already, but it may still give you something to do.
+            tasks?.checkEmail(account.id, id, item)
             return false
         }
         val code = MailCodes.find(item.subject, item.text)
@@ -390,8 +392,9 @@ class InboxAgent(
                 undecided("Left unread: your mailbox didn't take the change. Tried again on the next check.", tell = false)
                 return false
             }
-            save(entry(null, MailActions.MARKED_READ, QUIET_SUMMARY))
+            val id = save(entry(null, MailActions.MARKED_READ, QUIET_SUMMARY))
             sortedNow()
+            tasks?.checkEmail(account.id, id, item)
             return true
         }
         // A sender you said is important always reaches you.

@@ -2,6 +2,7 @@ package app.brokeometer.tasks
 
 import app.brokeometer.mail.MailItem
 import app.brokeometer.mail.MailPrompts
+import app.brokeometer.mail.MailSession
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -21,12 +22,12 @@ object TaskPrompts {
         items.forEachIndexed { i, it ->
             val came = Instant.ofEpochMilli(it.receivedAt).atZone(zone).toLocalDate()
             appendLine("e$i. From: ${it.fromName} <${it.fromAddress}>. Came on $came. Subject: ${it.subject.take(150)}")
-            appendLine(it.text.take(EMAIL_TEXT).replace(Regex("\\s+"), " "))
+            appendLine(it.text.take(MailSession.TEXT_LIMIT).replace(Regex("\\s+"), " "))
             appendLine()
         }
-        appendLine("For each email: ${MailPrompts.TASK_RULE}")
-        appendLine("Only things still to come, today or later. Leave out emails with no task.")
-        append("""Answer with JSON only: {"tasks":[{"e":"e0","what":"...","day":"YYYY-MM-DD","time":"HH:MM, or empty"}]}, or {"tasks":[]} when there are none.""")
+        appendLine("Read every email to the end. For each one: ${MailPrompts.TASK_RULE}")
+        appendLine("At most one task per email. Leave out emails with no task.")
+        append("""Answer with JSON only: {"tasks":[{"e":"e0","what":"...","day":"YYYY-MM-DD, or empty","in_days":null,"time":"HH:MM, or empty"}]}, or {"tasks":[]} when there are none.""")
     }
 
     /** One note, in its own words. */
@@ -55,6 +56,5 @@ object TaskPrompts {
         }
     }
 
-    private const val EMAIL_TEXT = 600
     private const val NOTE_TEXT = 3000
 }
