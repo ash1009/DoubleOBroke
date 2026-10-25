@@ -24,6 +24,7 @@ import app.brokeometer.vault.VaultManager
 import app.brokeometer.mail.MailDatabase
 import app.brokeometer.mail.MailNotifier
 import app.brokeometer.mail.MailReader
+import app.brokeometer.mail.MailSessions
 import app.brokeometer.mail.StarredMail
 import app.brokeometer.data.LogKinds
 import app.brokeometer.news.NewsAgent
@@ -99,7 +100,7 @@ class AppContainer(app: BrokeApp) {
     val mail = MailAgent(app, mailDatabase.dao(), prefs, claude, gemini, app.scope)
     val mailNotifier = MailNotifier(app)
     /** One open connection per account, shared by reading emails and the changes you make to them. */
-    val mailSessions = app.brokeometer.mail.MailSessions(prefs, mail)
+    val mailSessions = MailSessions(prefs, mail)
     val mailReader = MailReader(mailDatabase.dao(), prefs, mail, java.io.File(app.cacheDir, "mail"), sessions = mailSessions)
     val tasksDatabase: TasksDatabase = TasksDatabase.create(app)
     val tasks = TaskAgent(app, tasksDatabase.dao(), mailDatabase.dao(), mail, mailReader, app.scope)
