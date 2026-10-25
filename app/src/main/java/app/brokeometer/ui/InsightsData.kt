@@ -9,6 +9,7 @@ import app.brokeometer.insights.Averages
 import app.brokeometer.insights.averages
 import app.brokeometer.insights.CategoryChange
 import app.brokeometer.insights.DAYS_PER_MONTH
+import app.brokeometer.insights.FixedCosts
 import app.brokeometer.insights.FxTable
 import app.brokeometer.insights.Goals
 import app.brokeometer.insights.History
@@ -62,6 +63,7 @@ fun buildInsights(
     today: LocalDate,
     goals: Goals,
     hiddenRegulars: Set<String> = emptySet(),
+    fixed: FixedCosts = FixedCosts(),
 ): InsightsData {
     val unconverted = HashMap<String, Long>()
     val spends = rows.mapNotNull { row ->
@@ -82,6 +84,7 @@ fun buildInsights(
             merchantName = row.merchantName,
             hour = if (timed) Dates.hourOf(row.occurredAt) else null,
             occurredAt = row.occurredAt,
+            fixed = fixed.has(sub.categoryId, sub.id),
         )
     }
     val spendDays = (rows + pending).mapNotNull { runCatching { Dates.parseDay(it.day) }.getOrNull() }.toSet()
@@ -92,7 +95,7 @@ fun buildInsights(
         goals = goals,
         runway = run,
         allowance = allowance(history, goals, run),
-        categories = categoryChanges(history, goals),
+        categories = categoryChanges(history, goals, fixed),
         noSpend = noSpend(history, goals),
         places = topPlaces(lastDays(history, 90)),
         whenYouSpend = whenYouSpend(history),

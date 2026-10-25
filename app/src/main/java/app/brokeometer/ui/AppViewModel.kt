@@ -116,6 +116,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** A payment that was money put on the Oyster card: it moves to Money in as a top-up. */
     fun oysterTopUp(id: Long) = viewModelScope.launch { container.money.markTopUp(id) }
 
+    /** A payment that was a deposit you get back: it moves to Money in, off the balance but not spending. */
+    fun deposit(id: Long) = viewModelScope.launch { container.money.markDeposit(id) }
+
     fun moneyOther(id: Long) = viewModelScope.launch { container.money.markOther(id) }
 
     /** A transfer out that was really a payment: back to payments waiting. */
@@ -167,9 +170,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _todayForInsights,
         prefs.goals,
         prefs.hiddenRegulars,
-    ) { inputs, today, goals, hidden ->
-        buildInsights(inputs.rows, inputs.pending, inputs.catalog, inputs.fx, inputs.away, today, goals, hidden)
+        prefs.fixedCosts,
+    ) { inputs, today, goals, hidden, fixed ->
+        buildInsights(inputs.rows, inputs.pending, inputs.catalog, inputs.fx, inputs.away, today, goals, hidden, fixed)
     }.flowOn(Dispatchers.Default).held(null)
+
+    /** Categories and sub-categories you can't cut back on, like rent. */
+    val fixedCosts: StateFlow<app.brokeometer.insights.FixedCosts> = prefs.fixedCosts
+
+    fun setFixedCategory(id: Long, on: Boolean) {
+        val f = prefs.fixedCosts.value
+        prefs.setFixedCosts(f.copy(categories = if (on) f.categories + id else f.categories - id))
+    }
+
+    fun setFixedSubcategory(id: Long, on: Boolean) {
+        val f = prefs.fixedCosts.value
+        prefs.setFixedCosts(f.copy(subcategories = if (on) f.subcategories + id else f.subcategories - id))
+    }
 
     /** The year open on the recap screen. */
     private val _recapYear = MutableStateFlow(LocalDate.now().year)

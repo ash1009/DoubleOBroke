@@ -29,6 +29,8 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -60,6 +62,7 @@ fun CategoriesScreen(vm: AppViewModel) {
     val catalog by vm.catalog.collectAsStateWithLifecycle()
     val insights by vm.insights.collectAsStateWithLifecycle()
     val averages = insights?.averages
+    val fixed by vm.fixedCosts.collectAsStateWithLifecycle()
     var expanded by remember { mutableStateOf(setOf<Long>()) }
     var naming by remember { mutableStateOf<NameRequest?>(null) }
     val brand = LocalBrand.current
@@ -118,8 +121,13 @@ fun CategoriesScreen(vm: AppViewModel) {
                         Spacer(Modifier.width(14.dp))
                         Column(Modifier.weight(1f)) {
                             Text(category.name, style = MaterialTheme.typography.titleLarge)
+                            val fixedSubs = subs.filter { it.id in fixed.subcategories }
                             Text(
-                                subs.joinToString(", ") { it.name },
+                                when {
+                                    category.id in fixed.categories -> "Fixed cost. "
+                                    fixedSubs.isNotEmpty() -> "Fixed: ${fixedSubs.joinToString(", ") { it.name }}. "
+                                    else -> ""
+                                } + subs.joinToString(", ") { it.name },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
@@ -144,19 +152,53 @@ fun CategoriesScreen(vm: AppViewModel) {
                     }
                     AnimatedVisibility(visible = open) {
                       Column {
+                        val wholeFixed = category.id in fixed.categories
+                        // Fixed costs, like rent: there's no cutting back on them.
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(start = 46.dp, end = 12.dp, top = 4.dp, bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                                Text("All of ${category.name} is a fixed cost", style = MaterialTheme.typography.bodyLarge)
+                                Text(
+                                    "Like rent. Left out of Where to cut back and the daily allowance. Switch on single sub-categories below instead.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Switch(
+                                checked = wholeFixed,
+                                onCheckedChange = { vm.setFixedCategory(category.id, it) },
+                                colors = SwitchDefaults.colors(checkedTrackColor = brand.action, checkedThumbColor = brand.onAction),
+                            )
+                        }
                         subs.forEach { sub ->
                             Row(
                                 Modifier
                                     .fillMaxWidth()
-                                    .padding(start = 46.dp, end = 48.dp, top = 8.dp, bottom = 8.dp),
+                                    .padding(start = 46.dp, end = 12.dp, top = 4.dp, bottom = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Text(sub.name, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                                Column(Modifier.weight(1f)) {
+                                    Text(sub.name, style = MaterialTheme.typography.bodyLarge)
+                                    if (wholeFixed || sub.id in fixed.subcategories) {
+                                        Text("Fixed cost", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
                                 val avg = averages?.bySubcategory?.get(sub.id)
                                 AmountText(
                                     avg?.let { Money.format(it) } ?: "£0.00",
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Switch(
+                                    checked = wholeFixed || sub.id in fixed.subcategories,
+                                    enabled = !wholeFixed,
+                                    onCheckedChange = { vm.setFixedSubcategory(sub.id, it) },
+                                    colors = SwitchDefaults.colors(checkedTrackColor = brand.action, checkedThumbColor = brand.onAction),
                                 )
                             }
                         }

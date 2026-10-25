@@ -47,6 +47,8 @@ class BackupManager(
             username = prefs.username.value,
             hiddenRegulars = prefs.hiddenRegulars.value,
             goals = goals,
+            fixedCategories = prefs.fixedCosts.value.categories,
+            fixedSubcategories = prefs.fixedCosts.value.subcategories,
         )
         val avatar = avatarFile.takeIf { it.exists() && it.length() in 1..MAX_AVATAR_BYTES }
             ?.let { Base64.encodeToString(it.readBytes(), Base64.NO_WRAP) }
@@ -88,6 +90,13 @@ class BackupManager(
         if (plan.restoresGoals && prefs.goals.value.isEmpty) {
             val goals = backup.settings.goals
             prefs.setGoals(goals.copy(categoryCaps = RestorePlanner.mapCaps(goals.categoryCaps, backup.categories, phoneCategories)))
+        }
+        // Fixed costs (like rent) come back too, added to any set on this phone.
+        val fixedNow = prefs.fixedCosts.value
+        val fixedCats = RestorePlanner.mapCategoryIds(backup.settings.fixedCategories, backup.categories, phoneCategories)
+        val fixedSubs = backup.settings.fixedSubcategories.mapNotNull { subMap[it] }.toSet()
+        if (fixedCats.isNotEmpty() || fixedSubs.isNotEmpty()) {
+            prefs.setFixedCosts(fixedNow.copy(categories = fixedNow.categories + fixedCats, subcategories = fixedNow.subcategories + fixedSubs))
         }
         val hidden = RestorePlanner.mapHidden(backup.settings.hiddenRegulars, subMap)
         hidden.forEach { if (it !in prefs.hiddenRegulars.value) prefs.hideRegular(it) }

@@ -64,6 +64,28 @@ class InsightsTest {
     }
 
     @Test
+    fun rentIsKeptOutOfWhereToCutBackAndTheAllowance() {
+        // £900 rent (Bills, sub 21) on 1 October, never paid before; Bills' phone bill (sub 20) as usual.
+        val rent = spend(LocalDate.of(2026, 10, 1), 90_000, category = 2, sub = 21).copy(fixed = true)
+        val phone = (4..9).map { spend(LocalDate.of(2026, it, 1), 1000, category = 2, sub = 20) } + spend(LocalDate.of(2026, 10, 1), 1000, category = 2, sub = 20)
+        val history = History(steady() + rent + phone, AwayDays.NONE, today)
+        val fixed = FixedCosts(subcategories = setOf(21L))
+
+        val bills = categoryChanges(history, Goals(), fixed).first { it.categoryId == 2L }
+        assertEquals(1000L, bills.thisMonthMinor)
+        assertTrue(bills.changeMinor < 1000L)
+
+        val a = allowance(history, Goals(monthlyLimitMinor = 30_000), null)!!
+        assertEquals(3500L + 1000, a.spentMinor)
+        assertEquals(90_000L, a.fixedMinor)
+        assertEquals((30_000L - 4500) / 24, a.perDayMinor)
+
+        // A category that's all fixed doesn't show at all.
+        val all = categoryChanges(history, Goals(), FixedCosts(categories = setOf(2L)))
+        assertTrue(all.none { it.categoryId == 2L })
+    }
+
+    @Test
     fun noSpendDaysSkipTripsAndStopAtTheFirstSpend() {
         val days = listOf(1, 2, 6).map { spend(LocalDate.of(2026, 10, it), 100) }
         val away = AwayDays(listOf(LocalDate.of(2026, 10, 3) to LocalDate.of(2026, 10, 4)))

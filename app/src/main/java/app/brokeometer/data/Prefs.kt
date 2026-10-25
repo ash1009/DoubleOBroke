@@ -1,6 +1,7 @@
 package app.brokeometer.data
 
 import android.content.Context
+import app.brokeometer.insights.FixedCosts
 import app.brokeometer.insights.Goals
 import java.time.LocalDate
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -58,6 +59,23 @@ class Prefs(context: Context) {
         val value = _ownNames.value + clean
         sp.edit().putStringSet(KEY_OWN_NAMES, value).apply()
         _ownNames.value = value
+    }
+
+    /** Categories and sub-categories you can't cut back on, like rent. */
+    private val _fixedCosts = MutableStateFlow(readFixedCosts())
+    val fixedCosts: StateFlow<FixedCosts> = _fixedCosts
+
+    private fun readFixedCosts(): FixedCosts {
+        fun ids(key: String) = sp.getStringSet(key, emptySet()).orEmpty().mapNotNull { it.toLongOrNull() }.toSet()
+        return FixedCosts(ids(KEY_FIXED_CATEGORIES), ids(KEY_FIXED_SUBCATEGORIES))
+    }
+
+    fun setFixedCosts(value: FixedCosts) {
+        sp.edit()
+            .putStringSet(KEY_FIXED_CATEGORIES, value.categories.map { it.toString() }.toSet())
+            .putStringSet(KEY_FIXED_SUBCATEGORIES, value.subcategories.map { it.toString() }.toSet())
+            .apply()
+        _fixedCosts.value = value
     }
 
     fun hideRegular(key: String) = setHiddenRegulars(_hiddenRegulars.value + key)
@@ -424,6 +442,8 @@ class Prefs(context: Context) {
         val MORE = listOf("limits", "passwords", "notes", "news")
         private const val KEY_LAST_TRAVEL_DAY = "last_travel_day"
         private const val KEY_HIDDEN_REGULARS = "hidden_regulars"
+        private const val KEY_FIXED_CATEGORIES = "fixed_categories"
+        private const val KEY_FIXED_SUBCATEGORIES = "fixed_subcategories"
         private const val KEY_GEMINI = "gemini_key"
         private const val KEY_APP_LOCK = "app_lock"
         private const val KEY_GEMINI_MODEL = "gemini_model"

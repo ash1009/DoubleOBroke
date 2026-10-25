@@ -94,6 +94,22 @@ fun MoneyInScreen(vm: AppViewModel) {
                 },
                 dismissButton = { TextButton(onClick = { asking = null }) { Text("Keep") } },
             )
+        } else if (open.kind == MoveKind.DEPOSIT) {
+            AlertDialog(
+                onDismissRequest = { asking = null },
+                title = { Text("Deposit") },
+                text = {
+                    Text(
+                        "${Money.format(open.amountMinor, open.currency)} to ${open.counterparty.ifBlank { "someone" }}. You get it back, " +
+                            "so it isn't spending: it comes off your bank balance, but not your totals or averages. If it was a " +
+                            "payment, it goes back to payments waiting."
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { vm.notATransfer(open.id); asking = null }) { Text("It was a payment", color = brand.action) }
+                },
+                dismissButton = { TextButton(onClick = { asking = null }) { Text("Keep") } },
+            )
         } else if (open.direction == MoneyMoveEntity.OUT) {
             AlertDialog(
                 onDismissRequest = { asking = null },
@@ -152,6 +168,10 @@ private fun MoveRow(
         move.kind == MoveKind.TOPUP -> {
             title = "Oyster top-up"
             detail = "From ${move.bank} to your Oyster card, $time"
+        }
+        move.kind == MoveKind.DEPOSIT -> {
+            title = "Deposit to ${move.counterparty.ifBlank { "someone" }}"
+            detail = "You get it back, so it isn't spending. ${move.bank}, $time"
         }
         move.direction == MoneyMoveEntity.OUT -> {
             title = "To ${move.counterparty.ifBlank { "your account" }}"

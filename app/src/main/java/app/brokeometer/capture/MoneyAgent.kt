@@ -183,6 +183,36 @@ class MoneyAgent(
         true
     }
 
+    /**
+     * You said this payment was a deposit you get back (a rent deposit, say): it moves to Money in as one.
+     * It still comes off the bank balance, but isn't spending, so it's in no total or average.
+     */
+    suspend fun markDeposit(txId: Long): Boolean = lock.withLock {
+        val tx = dao.transaction(txId) ?: return@withLock false
+        db.withTransaction {
+            dao.insertMove(
+                MoneyMoveEntity(
+                    direction = MoneyMoveEntity.OUT,
+                    kind = MoveKind.DEPOSIT,
+                    amountMinor = tx.paidMinor ?: tx.amountMinor,
+                    currency = tx.currency,
+                    counterparty = tx.merchantName,
+                    reference = "",
+                    descriptor = tx.descriptor,
+                    bank = bankOf(tx),
+                    account = tx.account,
+                    occurredAt = tx.occurredAt,
+                    day = tx.day,
+                    sourceKey = "deposit|${tx.sourceKey ?: tx.id}",
+                    createdAt = System.currentTimeMillis(),
+                )
+            )
+            repository.delete(tx.id)
+        }
+        notifier.cancel(tx.id)
+        true
+    }
+
     /** You said this money in came from one of your own accounts. */
     suspend fun markMine(id: Long) = lock.withLock {
         val move = dao.move(id) ?: return@withLock

@@ -144,6 +144,8 @@ object MoveKind {
     const val UNSORTED = "UNSORTED"
     /** Money put on the Oyster card (direction OUT): it moves from the bank to Oyster, and isn't spending. */
     const val TOPUP = "TOPUP"
+    /** A deposit you get back, like a rent deposit (direction OUT): it leaves the bank, but isn't spending. */
+    const val DEPOSIT = "DEPOSIT"
 }
 
 /**

@@ -306,7 +306,9 @@ private fun MoneyCard(app: AppViewModel, actions: HomeActions) {
     val month = YearMonth.from(today)
     val summary = remember(entries, catalog, today, away) { summarise(entries, catalog, month, today, away) }
     val usual = remember(dayTotals, month, away) { usualMonthMinor(dayTotals, month, away) }
-    val spentToday = summary.perDay.getOrNull(today.dayOfMonth - 1) ?: 0L
+    // Fixed costs paid today (rent, say) don't count against the day: there's no cutting back on them.
+    val fixedToday = insights?.history?.thisMonth?.filter { it.fixed && it.day == today }?.sumOf { it.gbpMinor } ?: 0L
+    val spentToday = ((summary.perDay.getOrNull(today.dayOfMonth - 1) ?: 0L) - fixedToday).coerceAtLeast(0L)
 
     // A day's amount: what's left of the month's limit when today began, shared over the days left;
     // without a limit, your usual day.

@@ -275,6 +275,12 @@ private fun AllowanceCard(d: InsightsData, onSet: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        if (a.fixedMinor > 0) {
+            CardText(
+                "Fixed costs this month: ${Money.formatWhole(a.fixedMinor)}, not counted here.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

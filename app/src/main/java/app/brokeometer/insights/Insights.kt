@@ -24,7 +24,17 @@ data class Spend(
     /** Hour of day, or null when the time is not known (imported or typed in). */
     val hour: Int?,
     val occurredAt: Long,
+    /** A fixed cost, like rent: there's no cutting back on it (see [FixedCosts]). */
+    val fixed: Boolean = false,
 )
+
+/**
+ * What can't be cut back, like rent: whole categories, or single sub-categories. Fixed costs still count
+ * in totals, but are kept out of Where to cut back and the daily allowance.
+ */
+data class FixedCosts(val categories: Set<Long> = emptySet(), val subcategories: Set<Long> = emptySet()) {
+    fun has(categoryId: Long, subcategoryId: Long): Boolean = categoryId in categories || subcategoryId in subcategories
+}
 
 /** What the owner has set on the Goals sheet. Everything is optional. */
 data class Goals(
@@ -89,6 +99,8 @@ class History(
     // This month
     val thisMonth: List<Spend> = byMonth[currentMonth].orEmpty()
     val spentThisMonth: Long = thisMonth.sumOf { it.gbpMinor }
+    /** Fixed costs this month (rent, say), part of [spentThisMonth]. */
+    val fixedThisMonth: Long = thisMonth.filter { it.fixed }.sumOf { it.gbpMinor }
     /** Days at home so far this month, today included. */
     val homeDaysSoFar: Int = (1..today.dayOfMonth).count { currentMonth.atDay(it) !in away }
     /** Days at home from tomorrow to the end of the month. */
@@ -178,17 +190,20 @@ data class Allowance(
     val daysLeft: Int,
     /** What can be spent each day from now on. Null when the limit is already used up. */
     val perDayMinor: Long?,
+    /** Fixed costs paid this month (rent, say): not part of [spentMinor], as there's no cutting back on them. */
+    val fixedMinor: Long = 0,
 )
 
+/** The month's limit shared over the days left. Only day-to-day spending counts against it, not fixed costs. */
 fun allowance(history: History, goals: Goals, runway: Runway?): Allowance? {
     val fromGoal = goals.monthlyLimitMinor
     val limit = fromGoal ?: runway?.monthlyToLastMinor ?: return null
-    val spent = history.spentThisMonth
+    val spent = history.spentThisMonth - history.fixedThisMonth
     val left = limit - spent
     val todayAtHome = if (history.today in history.away) 0 else 1
     val daysLeft = history.homeDaysAfterToday + todayAtHome
     val perDay = if (left > 0 && daysLeft > 0) left / daysLeft else null
-    return Allowance(limit, fromGoal == null, spent, left, daysLeft, perDay)
+    return Allowance(limit, fromGoal == null, spent, left, daysLeft, perDay, history.fixedThisMonth)
 }
 
 // Categories against a usual month
@@ -205,16 +220,20 @@ data class CategoryChange(
     val changeMinor: Long get() = thisMonthMinor - usualByNowMinor
 }
 
-fun categoryChanges(history: History, goals: Goals): List<CategoryChange> {
-    val ids = (history.thisMonth.map { it.categoryId } +
-        history.baseMonths.flatMap { m -> history.byMonth[m].orEmpty().map { it.categoryId } } +
-        goals.categoryCaps.keys).toSet()
+/**
+ * Each category this month against its average, most over first. Fixed costs (rent, say) are left out,
+ * as there's no cutting back on them: a category that's all fixed doesn't show at all.
+ */
+fun categoryChanges(history: History, goals: Goals, fixed: FixedCosts = FixedCosts()): List<CategoryChange> {
+    val ids = (history.thisMonth.filter { !it.fixed }.map { it.categoryId } +
+        history.baseMonths.flatMap { m -> history.byMonth[m].orEmpty().filter { !it.fixed }.map { it.categoryId } } +
+        goals.categoryCaps.keys).toSet() - fixed.categories
     val homeDaysInMonth = history.homeDays(history.currentMonth)
     return ids.map { id ->
-        val daily = history.averageDaily { it.categoryId == id } ?: 0.0
+        val daily = history.averageDaily { it.categoryId == id && !it.fixed } ?: 0.0
         CategoryChange(
             categoryId = id,
-            thisMonthMinor = history.thisMonth.filter { it.categoryId == id }.sumOf { it.gbpMinor },
+            thisMonthMinor = history.thisMonth.filter { it.categoryId == id && !it.fixed }.sumOf { it.gbpMinor },
             usualByNowMinor = (daily * history.homeDaysSoFar).roundToLong(),
             usualMonthMinor = (daily * homeDaysInMonth).roundToLong(),
             capMinor = goals.categoryCaps[id],

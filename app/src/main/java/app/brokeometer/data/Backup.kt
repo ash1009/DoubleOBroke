@@ -41,6 +41,9 @@ data class BackupSettings(
     val hiddenRegulars: Set<String> = emptySet(),
     /** Category caps here are keyed by the backup's own category ids. */
     val goals: Goals = Goals(),
+    /** Fixed costs (like rent), by the backup's own category and sub-category ids. */
+    val fixedCategories: Set<Long> = emptySet(),
+    val fixedSubcategories: Set<Long> = emptySet(),
 )
 
 /** Reads and writes backup files. Plain JSON, so it can be opened and checked by hand. */
@@ -88,6 +91,8 @@ object BackupCodec {
                 putOpt("noSpendTarget", goals.noSpendTarget)
                 put("categoryCaps", JSONObject().apply { goals.categoryCaps.forEach { (id, cap) -> put(id.toString(), cap) } })
             })
+            put("fixedCategories", JSONArray(data.settings.fixedCategories.sorted()))
+            put("fixedSubcategories", JSONArray(data.settings.fixedSubcategories.sorted()))
         })
         root.putOpt("avatar", data.avatar)
         root.putOpt("vault", data.vault)
@@ -238,6 +243,8 @@ object BackupCodec {
                         id to caps.getLong(k)
                     }.toMap(),
                 ),
+                fixedCategories = s.longSet("fixedCategories"),
+                fixedSubcategories = s.longSet("fixedSubcategories"),
             )
             return BackupData(
                 exportedAt = root.optLong("exportedAt", 0),
@@ -265,6 +272,10 @@ object BackupCodec {
     private fun JSONObject.longOrNull(name: String): Long? = if (isNull(name)) null else getLong(name)
     private fun JSONObject.doubleOrNull(name: String): Double? = if (isNull(name)) null else getDouble(name)
     private fun JSONObject.stringOrNull(name: String): String? = if (isNull(name)) null else getString(name)
+    private fun JSONObject.longSet(name: String): Set<Long> {
+        val arr = optJSONArray(name) ?: return emptySet()
+        return (0 until arr.length()).mapNotNull { arr.optLong(it, -1L).takeIf { id -> id >= 0 } }.toSet()
+    }
 }
 
 /** What a restore would add. Nothing on the phone is ever changed or deleted by a restore. */
@@ -366,6 +377,15 @@ object RestorePlanner {
             val name = backupCategories.firstOrNull { it.id == oldId }?.name ?: return@mapNotNull null
             phoneByName[norm(name)]?.let { it.id to cap }
         }.toMap()
+    }
+
+    /** Fixed-cost categories, matched by name like the caps. */
+    fun mapCategoryIds(ids: Set<Long>, backupCategories: List<CategoryEntity>, phoneCategories: List<CategoryEntity>): Set<Long> {
+        val phoneByName = phoneCategories.associateBy { norm(it.name) }
+        return ids.mapNotNull { old ->
+            val name = backupCategories.firstOrNull { it.id == old }?.name ?: return@mapNotNull null
+            phoneByName[norm(name)]?.id
+        }.toSet()
     }
 
     /** Hidden regular payments start with the sub-category id: "12|SHOP|10". */

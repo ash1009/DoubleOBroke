@@ -80,6 +80,8 @@ fun EntrySheet(
     start: EntryStart? = null,
     /** For a bank payment that was money put on the Oyster card: it moves to Money in as a top-up. */
     onTopUp: (() -> Unit)? = null,
+    /** For a bank payment that was a deposit you get back: it moves to Money in, and isn't spending. */
+    onDeposit: (() -> Unit)? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
@@ -174,6 +176,13 @@ fun EntrySheet(
                 QuietButton(
                     text = "It's an Oyster top-up",
                     onClick = { close(onTopUp) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            if (onDeposit != null) {
+                QuietButton(
+                    text = "It's a deposit I get back",
+                    onClick = { close(onDeposit) },
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
