@@ -78,4 +78,24 @@ class TaskRulesTest {
         assertEquals("Tue 3 Nov, 10:00", TaskRules.whenText(LocalDate.parse("2026-11-03"), 600, today))
         assertEquals(TaskRules.keyOf("Submit WTW assessment!"), TaskRules.keyOf("submit wtw assessment"))
     }
+
+    @Test
+    fun birthdaysAndOtherPeoplesEventsAreLeftOut() {
+        val me = "alex@gmail.com"
+        assertTrue(TaskRules.keepEvent("Pause Uber One", false, null, me, me))
+        assertTrue(TaskRules.keepEvent("Escape the Heat, Secure the Enterprise", false, null, "", me))
+        assertTrue(TaskRules.keepEvent("Flight to Dublin (FR 123)", false, null, TaskRules.GMAIL_ORGANIZER, me))
+        assertTrue(TaskRules.keepEvent("Gym", false, "FREQ=WEEKLY;BYDAY=MO", me, me))
+        assertTrue(TaskRules.keepEvent("Birthday dinner", false, null, me, me))
+        assertFalse(TaskRules.keepEvent("Sam's birthday", true, null, me, me))
+        assertFalse(TaskRules.keepEvent("Sam", true, "FREQ=YEARLY", me, me))
+        assertFalse(TaskRules.keepEvent("Team sync", false, null, "boss@work.com", me))
+    }
+
+    @Test
+    fun googleTasksDueDatesAreTheDayOnly() {
+        assertEquals(LocalDate.of(2026, 10, 28), TaskRules.googleDue("2026-10-28T00:00:00.000Z"))
+        assertNull(TaskRules.googleDue(null))
+        assertNull(TaskRules.googleDue(""))
+    }
 }

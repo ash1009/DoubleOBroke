@@ -65,6 +65,7 @@ class BrokeApp : Application() {
         TaskWorker.schedule(this)
         scope.launch {
             runCatching { container.tasks.syncCalendar() }
+            runCatching { container.tasks.syncGoogleTasks() }
             runCatching { container.tasks.check() }
         }
         // Once: the last two weeks of email, for tasks still to come.

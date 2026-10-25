@@ -58,7 +58,7 @@ Each part of the app is an agent that does a job in the background and asks you 
 - Bring notes in from Google Keep with a Google Takeout export. Notes are in the app's backup too.
 
 ### Tasks
-- Things to do from your emails (the AI picks out deadlines, interviews and bills, and looks back over the last two weeks once), your phone's calendar, your notes, and ones you add.
+- Things to do from your emails (the AI picks out deadlines, interviews and bills, and looks back over the last two weeks once), your phone's calendar (your own events and ones Gmail adds, like flights, with no birthdays), Google Tasks (with your Google sign-in, read only), your notes, and ones you add.
 - One notification each evening with tomorrow's tasks, and a reminder a day before anything with a time.
 
 ### News
@@ -143,7 +143,7 @@ Release builds are signed with a key from the environment when one is given (`SI
 
 ## Tests
 
-194 unit tests cover the parts with the most logic: bank message parsing, money in and transfer matching, category guessing, CSV import and backups, trip finding and fares, the day timeline, screen time maths, limit rules and blocked hours, email prompts and actions, task reminders, and the vault's encryption and import.
+198 unit tests cover the parts with the most logic: bank message parsing, money in and transfer matching, category guessing, CSV import and backups, trip finding and fares, the day timeline, screen time maths, limit rules and blocked hours, email prompts and actions, task reminders, and the vault's encryption and import.
 
 During development, the app also ran on an Android emulator in CI, which tapped through it with made-up data and saved the screenshots above.
 

@@ -1,6 +1,9 @@
 package app.brokeometer.ui.screens
 
 import android.Manifest
+import android.accounts.AccountManager
+import android.app.Activity
+import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -491,7 +494,30 @@ private fun TasksSetupPage(vm: TasksViewModel, listState: LazyListState) {
     val lookBack by vm.lookBack.collectAsStateWithLifecycle()
     val lookingBack by vm.lookingBack.collectAsStateWithLifecycle()
     val calendarProblem by vm.calendarProblem.collectAsStateWithLifecycle()
+    val googleAccounts by vm.googleAccounts.collectAsStateWithLifecycle()
+    val googleProblems by vm.googleProblems.collectAsStateWithLifecycle()
+    val googleProblem by vm.googleProblem.collectAsStateWithLifecycle()
     var pickingSummary by remember { mutableStateOf(false) }
+    // Google Tasks: the account being added, and Google's screen when it needs you to agree.
+    var googleAccount by remember { mutableStateOf<String?>(null) }
+    var googleAsk by remember { mutableStateOf<Intent?>(null) }
+    val agreeGoogle = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        val name = googleAccount
+        if (r.resultCode == Activity.RESULT_OK && name != null) vm.connectGoogle(name) { googleAsk = it }
+    }
+    val pickGoogle = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        val name = r.data?.getStringExtra(AccountManager.KEY_ACCOUNT_NAME)
+        if (r.resultCode == Activity.RESULT_OK && !name.isNullOrBlank()) {
+            googleAccount = name
+            vm.connectGoogle(name) { googleAsk = it }
+        }
+    }
+    LaunchedEffect(googleAsk) {
+        googleAsk?.let {
+            googleAsk = null
+            runCatching { agreeGoogle.launch(it) }
+        }
+    }
     val brand = LocalBrand.current
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val askCalendar = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -524,13 +550,43 @@ private fun TasksSetupPage(vm: TasksViewModel, listState: LazyListState) {
                         "the sooner of two limits is used, and a test with no date gets 3 days.",
                     fromEmail,
                 ) { vm.setFromEmail(it) }
-                SetupSwitch("Calendar", "Only events you create in your own Google calendar, read on the phone. Birthdays, holidays, calendars you follow and invitations from others are left out.", fromCalendar) { on ->
+                SetupSwitch("Calendar", "Events you create in your own Google calendar, and ones Gmail adds like flights, read on the phone. Birthdays, holidays, calendars you follow and invitations from others are left out.", fromCalendar) { on ->
                     if (!on) vm.setFromCalendar(false)
                     else if (vm.canReadCalendar()) vm.setFromCalendar(true)
                     else askCalendar.launch(Manifest.permission.READ_CALENDAR)
                 }
                 if (fromCalendar) calendarProblem?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = brand.broke) }
                 SetupSwitch("Notes", "When you leave a note, the AI looks for dates in it. You can also set Remind me on a note yourself.", fromNotes) { vm.setFromNotes(it) }
+            }
+        }
+        item("google") {
+            PageCard {
+                CardHead("Google Tasks", "Your Google Tasks with a date show here, read with your Google sign-in. Nothing is changed in Google Tasks.")
+                googleAccounts.forEach { a ->
+                    val problem = googleProblems[a]
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(a, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            problem?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = brand.broke) }
+                        }
+                        if (problem != null) {
+                            TextButton(onClick = {
+                                googleAccount = a
+                                vm.connectGoogle(a) { googleAsk = it }
+                            }) { Text("Sign in", color = brand.action) }
+                        }
+                        TextButton(onClick = { vm.removeGoogle(a) }) { Text("Remove", color = muted) }
+                    }
+                }
+                googleProblem?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = brand.broke) }
+                QuietButton(
+                    "Add a Google account",
+                    onClick = {
+                        runCatching { pickGoogle.launch(AccountManager.newChooseAccountIntent(null, null, arrayOf("com.google"), null, null, null, null)) }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    height = 44.dp,
+                )
             }
         }
         if (fromEmail) {

@@ -8,6 +8,7 @@ import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.util.Log
 import android.provider.CalendarContract
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -37,6 +38,7 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
+import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -316,8 +318,8 @@ class TaskAgent(
 
     /**
      * Events you added to your own calendar, for the next [TaskRules.CALENDAR_DAYS] days, read on the
-     * phone: new ones are added, moved ones follow, and ones taken off the calendar go. Holidays,
-     * birthdays, calendars you follow and invitations from others are left out.
+     * phone: new ones are added, moved ones follow, and ones taken off the calendar go. Ones Gmail adds
+     * (flights, bookings) count; holidays, birthdays, calendars you follow and invitations from others don't.
      */
     suspend fun syncCalendar() {
         if (!_fromCalendar.value || !canReadCalendar()) return
@@ -387,7 +389,7 @@ class TaskAgent(
         return out
     }
 
-    /** Events you made yourself in your own calendars: you're their organiser (or none is named). */
+    /** Events in your own calendars that count (see [TaskRules.keepEvent]). */
     private fun readCalendar(start: Long, end: Long, zone: ZoneId): List<CalendarEvent> {
         val own = ownCalendars()
         if (own.isEmpty()) return emptyList()
@@ -403,18 +405,17 @@ class TaskAgent(
             CalendarContract.Instances.EVENT_LOCATION,
             CalendarContract.Instances.CALENDAR_ID,
             CalendarContract.Instances.ORGANIZER,
+            CalendarContract.Instances.RRULE,
         )
         val out = ArrayList<CalendarEvent>()
         val where = "${CalendarContract.Instances.CALENDAR_ID} IN (${own.keys.joinToString(",")})"
         context.contentResolver.query(uri, projection, where, null, null)?.use { c ->
             while (c.moveToNext()) {
                 val account = own[c.getLong(5)] ?: continue
-                val organizer = c.getString(6).orEmpty().trim()
-                // Invitations from other people are theirs, not yours.
-                if (organizer.isNotEmpty() && !organizer.equals(account, ignoreCase = true)) continue
                 val title = c.getString(1)?.trim().orEmpty().ifEmpty { "(No title)" }
                 val begin = c.getLong(2)
                 val allDay = c.getInt(3) == 1
+                if (!TaskRules.keepEvent(title, allDay, c.getString(7), c.getString(6).orEmpty(), account)) continue
                 // All-day events are stored at midnight in UTC.
                 val at = Instant.ofEpochMilli(begin).atZone(if (allDay) ZoneOffset.UTC else zone)
                 out += CalendarEvent(
@@ -427,6 +428,120 @@ class TaskAgent(
             }
         }
         return out
+    }
+
+    // From Google Tasks
+
+    private val google = GoogleTasks(context)
+
+    private val _googleAccounts = MutableStateFlow(googleAccountSet().sorted())
+    /** The Google accounts whose Google Tasks are read. */
+    val googleAccounts: StateFlow<List<String>> = _googleAccounts
+
+    private val _googleProblems = MutableStateFlow<Map<String, String>>(emptyMap())
+    /** What went wrong reading an account's Google Tasks last time, by account. */
+    val googleProblems: StateFlow<Map<String, String>> = _googleProblems
+
+    private val _googleProblem = MutableStateFlow<String?>(null)
+    /** Why adding an account didn't work, or null. */
+    val googleProblem: StateFlow<String?> = _googleProblem
+
+    private fun googleAccountSet(): Set<String> = sp.getStringSet(KEY_GOOGLE_ACCOUNTS, null).orEmpty().toSet()
+
+    /**
+     * Adds [account]'s Google Tasks. Returns Google's screen when you need to agree first: show it, and
+     * when you've said yes, call this again.
+     */
+    suspend fun connectGoogle(account: String): android.content.Intent? {
+        val name = account.trim()
+        if (name.isEmpty()) return null
+        _googleProblem.value = null
+        try {
+            google.token(name)
+        } catch (e: GoogleTasks.NeedsYou) {
+            if (e.intent == null) _googleProblem.value = "Google couldn't show its sign-in screen. Try again."
+            return e.intent
+        } catch (e: GoogleTasks.Refused) {
+            _googleProblem.value = GoogleTasks.refusedText(e.reason)
+            return null
+        } catch (e: IOException) {
+            _googleProblem.value = "Couldn't reach Google. Check the internet and try again."
+            return null
+        } catch (e: Exception) {
+            Log.w(TAG, "Google sign-in failed", e)
+            _googleProblem.value = "Couldn't sign in to Google (${e.javaClass.simpleName})."
+            return null
+        }
+        val set = googleAccountSet() + name
+        sp.edit().putStringSet(KEY_GOOGLE_ACCOUNTS, set).apply()
+        _googleAccounts.value = set.sorted()
+        _googleProblems.value = _googleProblems.value - name
+        syncGoogleTasks()
+        return null
+    }
+
+    /** Stops reading [account]'s Google Tasks; its tasks still to do go. */
+    fun removeGoogle(account: String) {
+        val set = googleAccountSet() - account
+        sp.edit().putStringSet(KEY_GOOGLE_ACCOUNTS, set).apply()
+        _googleAccounts.value = set.sorted()
+        _googleProblems.value = _googleProblems.value - account
+        scope.launch {
+            lock.withLock {
+                dao.bySource(TaskSource.GOOGLE_TASK).filter { !it.done && it.sourceKey.startsWith("$account:") }.forEach { dao.delete(it.id) }
+            }
+        }
+    }
+
+    /**
+     * Your Google Tasks with a date, today or later: new ones are added, changed ones follow, and ones
+     * finished or deleted in Google Tasks go. An account that couldn't be read keeps what it had.
+     */
+    suspend fun syncGoogleTasks() {
+        val accounts = googleAccountSet()
+        if (accounts.isEmpty()) return
+        val today = LocalDate.now()
+        val now = System.currentTimeMillis()
+        val problems = HashMap(_googleProblems.value)
+        val read = HashMap<String, List<GoogleTasksJson.Item>>()
+        for (a in accounts) {
+            try {
+                read[a] = google.read(a)
+                problems -= a
+            } catch (e: GoogleTasks.NeedsYou) {
+                problems[a] = "Google needs you to sign in again."
+            } catch (e: GoogleTasks.Refused) {
+                problems[a] = GoogleTasks.refusedText(e.reason)
+            } catch (e: IOException) {
+                problems[a] = "Couldn't reach Google. It's tried again in 15 minutes."
+            } catch (e: Exception) {
+                Log.w(TAG, "Google Tasks read failed", e)
+                problems[a] = "Couldn't read Google Tasks (${e.javaClass.simpleName})."
+            }
+        }
+        _googleProblems.value = problems.filterKeys { it in accounts }
+        if (read.isEmpty()) return
+        lock.withLock {
+            val had = dao.bySource(TaskSource.GOOGLE_TASK).associateBy { it.sourceKey }
+            val keys = HashSet<String>()
+            for ((account, items) in read) {
+                for (g in items) {
+                    val day = g.day ?: continue
+                    if (day.isBefore(today)) continue
+                    val key = "$account:${g.id}"
+                    keys += key
+                    val detail = listOf(g.list, g.notes.lineSequence().firstOrNull().orEmpty().take(200)).filter { it.isNotBlank() }.joinToString(": ")
+                    val old = had[key]
+                    if (old == null) {
+                        dao.insert(TaskEntity(title = g.title, detail = detail, day = day.toString(), source = TaskSource.GOOGLE_TASK, sourceKey = key, accountId = null, createdAt = now))
+                    } else if (!old.done && (old.title != g.title || old.detail != detail || old.day != day.toString())) {
+                        dao.update(old.copy(title = g.title, detail = detail, day = day.toString(), remindedAt = if (old.day != day.toString()) null else old.remindedAt))
+                    }
+                }
+            }
+            // Finished, deleted or undated in Google Tasks: gone here too (only for accounts that were read).
+            had.values.filter { t -> !t.done && t.sourceKey !in keys && read.keys.any { t.sourceKey.startsWith("$it:") } }.forEach { dao.delete(it.id) }
+        }
     }
 
     // Telling you
@@ -457,7 +572,7 @@ class TaskAgent(
                         tell(t, if (day == now.toLocalDate()) "Today" else "Tomorrow")
                         told += t.id
                     }
-                    TaskRules.lateNoticeDue(day, t.time, t.createdAt, t.remindedAt, TaskSource.yours(t.source) || t.source == TaskSource.CALENDAR, now, summaryAt, lastSummary) -> {
+                    TaskRules.lateNoticeDue(day, t.time, t.createdAt, t.remindedAt, TaskSource.madeByYou(t.source), now, summaryAt, lastSummary) -> {
                         tell(t, if (day == now.toLocalDate()) "New for today" else "New for tomorrow")
                         told += t.id
                     }
@@ -548,17 +663,20 @@ class TaskAgent(
         private const val KEY_LOOKED_BACK = "looked_back"
         private const val KEY_CALENDAR_SYNCED = "calendar_synced"
         /** The calendar is read again from scratch when its rules change. */
-        private const val CALENDAR_VERSION = 2
+        private const val CALENDAR_VERSION = 3
         private const val KEY_CALENDAR_VERSION = "calendar_version"
         private const val GOOGLE = "com.google"
+        private const val KEY_GOOGLE_ACCOUNTS = "google_accounts"
+        private const val TAG = "Tasks"
     }
 }
 
-/** Every 15 minutes: the calendar read again, and anything due sent. */
+/** Every 15 minutes: the calendar and Google Tasks read again, and anything due sent. */
 class TaskWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val tasks = (applicationContext as BrokeApp).container.tasks
         runCatching { tasks.syncCalendar() }
+        runCatching { tasks.syncGoogleTasks() }
         runCatching { tasks.check() }
         return Result.success()
     }

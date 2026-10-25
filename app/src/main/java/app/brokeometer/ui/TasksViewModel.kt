@@ -1,6 +1,7 @@
 package app.brokeometer.ui
 
 import android.app.Application
+import android.content.Intent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.brokeometer.BrokeApp
@@ -28,6 +29,9 @@ class TasksViewModel(application: Application) : AndroidViewModel(application) {
     val lookBack = agent.lookBack
     val lookingBack = agent.lookingBack
     val calendarProblem = agent.calendarProblem
+    val googleAccounts = agent.googleAccounts
+    val googleProblems = agent.googleProblems
+    val googleProblem = agent.googleProblem
 
     fun add(title: String, day: LocalDate?, time: Int?) = agent.add(title, day, time)
     fun change(task: TaskEntity, title: String, day: LocalDate?, time: Int?) = agent.change(task, title, day, time)
@@ -44,10 +48,21 @@ class TasksViewModel(application: Application) : AndroidViewModel(application) {
     fun canReadCalendar(): Boolean = agent.canReadCalendar()
     fun lookBackAgain() = agent.lookBackOnce(again = true)
 
+    /** Adds an account's Google Tasks; [onAsk] gets Google's screen when you need to agree first. */
+    fun connectGoogle(account: String, onAsk: (Intent) -> Unit) {
+        viewModelScope.launch {
+            val ask = runCatching { agent.connectGoogle(account) }.getOrNull()
+            if (ask != null) onAsk(ask)
+        }
+    }
+
+    fun removeGoogle(account: String) = agent.removeGoogle(account)
+
     /** The calendar read again and anything due sent, as on opening Tasks. */
     fun refresh() {
         viewModelScope.launch {
             runCatching { agent.syncCalendar() }
+            runCatching { agent.syncGoogleTasks() }
             runCatching { agent.check() }
         }
     }

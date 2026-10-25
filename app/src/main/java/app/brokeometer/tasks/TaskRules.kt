@@ -123,4 +123,24 @@ object TaskRules {
 
     /** A short, steady key for a task's words, so the same task found twice is kept once. */
     fun keyOf(title: String): String = title.lowercase(Locale.ROOT).filter { it.isLetterOrDigit() }.take(40)
+
+    /** The organiser Google gives events Gmail adds (flights, bookings). */
+    const val GMAIL_ORGANIZER = "unknownorganizer@calendar.google.com"
+
+    private val BIRTHDAY = Regex("""birthday|b'?day|\x{1F382}""", RegexOption.IGNORE_CASE)
+
+    /**
+     * Whether an event in your own calendar counts: ones you made, and ones Gmail adds. Invitations from
+     * other people are left out, and so are birthdays, which Google keeps in your own calendar as all-day
+     * events that come back every year.
+     */
+    fun keepEvent(title: String, allDay: Boolean, rrule: String?, organizer: String, account: String): Boolean {
+        val by = organizer.trim()
+        if (by.isNotEmpty() && !by.equals(account.trim(), ignoreCase = true) && !by.equals(GMAIL_ORGANIZER, ignoreCase = true)) return false
+        if (allDay && (rrule.orEmpty().contains("FREQ=YEARLY", ignoreCase = true) || BIRTHDAY.containsMatchIn(title))) return false
+        return true
+    }
+
+    /** A Google Tasks due date ("2026-10-28T00:00:00.000Z": the day only, Google keeps no time). */
+    fun googleDue(due: String?): LocalDate? = day(due?.trim()?.take(10))
 }

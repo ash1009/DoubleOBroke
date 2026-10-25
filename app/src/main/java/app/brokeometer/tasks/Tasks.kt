@@ -23,6 +23,8 @@ object TaskSource {
     const val NOTE_REMINDER = "NOTE_REMINDER"
     /** Found in a note's words by the AI. */
     const val NOTE = "NOTE"
+    /** From Google Tasks, with your Google sign-in. */
+    const val GOOGLE_TASK = "GOOGLE_TASK"
 
     fun label(source: String): String = when (source) {
         YOU -> "Added by you"
@@ -30,11 +32,15 @@ object TaskSource {
         CALENDAR -> "From your calendar"
         NOTE_REMINDER -> "Note reminder"
         NOTE -> "From a note"
+        GOOGLE_TASK -> "From Google Tasks"
         else -> source
     }
 
     /** Ones you set yourself, which never need telling about as new. */
     fun yours(source: String): Boolean = source == YOU || source == NOTE_REMINDER
+
+    /** Ones you made somewhere yourself (here, a note, your calendar, Google Tasks): no "new" notice for them. */
+    fun madeByYou(source: String): Boolean = yours(source) || source == CALENDAR || source == GOOGLE_TASK
 }
 
 /**
