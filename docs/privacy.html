@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Double O Broke privacy policy</title>
+<meta name="description" content="How the Double O Broke Android app handles your data.">
+<style>
+  :root { --bg: #fbfaf7; --text: #1d1d1b; --muted: #5e5c57; --line: #e4e1da; --accent: #b4561e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161615; --text: #ecebe7; --muted: #a8a59e; --line: #2e2d2a; --accent: #f0a46c; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 17px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 700px; margin: 0 auto; padding: 48px 16px 72px; }
+  h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 6px; }
+  h2 { font-size: 1.15rem; margin: 36px 0 8px; padding-top: 20px; border-top: 1px solid var(--line); }
+  p, li { margin: 0 0 10px; }
+  ul { padding-left: 22px; margin: 0 0 10px; }
+  .muted { color: var(--muted); }
+  a { color: var(--accent); }
+  .note { border-left: 3px solid var(--accent); padding: 4px 0 4px 14px; margin: 16px 0; }
+  nav { margin-bottom: 28px; font-size: 0.95rem; }
+</style>
+</head>
+<body>
+<main>
+  <nav><a href="./">Double O Broke</a></nav>
+  <h1>Privacy policy</h1>
+  <p class="muted">Last updated 25 October 2026</p>
+
+  <p>Double O Broke is a personal Android app. It has no server and no account. What it keeps is stored on your phone, and in backups only if you choose to make them.</p>
+
+  <h2>Google Tasks</h2>
+  <p>If you connect a Google account, the app reads your Google Tasks with read-only access (the <code>tasks.readonly</code> permission), so tasks with a due date show on its Tasks page.</p>
+  <ul>
+    <li>Tasks are read on the phone and a copy is kept on the phone only.</li>
+    <li>The app never changes anything in Google Tasks.</li>
+    <li>Your tasks are never sent to an AI model, never sold, never shared, and never sent to any server other than Google's own.</li>
+    <li>You can stop it at any time: in the app (Tasks, Setup, Remove), or at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</li>
+  </ul>
+  <p class="note">Double O Broke's use and transfer of information received from Google APIs will adhere to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
+
+  <h2>Calendar</h2>
+  <p>With your permission, the app reads your phone's calendar to show your own events as tasks. Calendar events never leave the phone.</p>
+
+  <h2>Email</h2>
+  <p>The app reads the email accounts you add, using app passwords you type into the app. To sort an email and find deadlines in it, the email's sender, subject and text are sent to the AI model you set up (Anthropic Claude or Google Gemini), using your own API key.</p>
+
+  <h2>Payments, notes and news</h2>
+  <ul>
+    <li>Bank payment notifications are read on the phone. To guess a category, the shop name, amount and time are sent to your AI model.</li>
+    <li>If you turn it on, a note's text is sent to your AI model to find dates in it.</li>
+    <li>News topics you follow are sent to Claude, which searches the web for them.</li>
+  </ul>
+
+  <h2>Location and travel</h2>
+  <p>Location history stays on the phone for 30 days and is left out of backups. To work out fares, trip places and times are sent to TfL Open Data.</p>
+
+  <h2>Passwords</h2>
+  <p>The password vault is encrypted on the phone. It is never sent to an AI model or a server.</p>
+
+  <h2>What the app doesn't do</h2>
+  <p>No ads, no analytics and no tracking. API keys and app passwords stay on the phone and are never in backups.</p>
+
+  <h2>Deleting your data</h2>
+  <p>Uninstall the app, or clear its storage in Android settings. Backups you made are files you control and can delete yourself.</p>
+
+  <h2>Contact</h2>
+  <p>Questions: open an issue on <a href="https://github.com/ash1009/DoubleOBroke/issues">GitHub</a>.</p>
+</main>
+</body>
+</html>
