@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.DirectionsSubway
 import androidx.compose.material.icons.rounded.HourglassBottom
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Lightbulb
+import androidx.compose.material.icons.rounded.TaskAlt
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Flag
@@ -103,6 +104,8 @@ import app.brokeometer.ui.screens.moneyPageNames
 import app.brokeometer.ui.screens.newsPageNames
 import app.brokeometer.ui.screens.notesPageNames
 import app.brokeometer.ui.screens.passwordsPageNames
+import app.brokeometer.ui.screens.taskPageNames
+import app.brokeometer.ui.screens.TasksBody
 import app.brokeometer.ui.screens.partOfDay
 import app.brokeometer.ui.screens.rememberMenuPull
 import app.brokeometer.ui.theme.LocalBrand
@@ -122,6 +125,7 @@ enum class Section(val key: String, val label: String, val pages: List<String>, 
     LIMITS("limits", "App limits", listOf("Today", "Limits", "Setup"), Icons.Rounded.HourglassBottom),
     NOTES("notes", "Notes", notesPageNames, Icons.Rounded.Lightbulb),
     PASSWORDS("passwords", "Passwords", passwordsPageNames, Icons.Rounded.Key),
+    TASKS("tasks", "Tasks", taskPageNames, Icons.Rounded.TaskAlt),
     /** Every feature without a place in the bar. */
     MORE("more", "More", listOf("More"), Icons.Rounded.MoreHoriz),
 }
@@ -158,6 +162,7 @@ fun shellPageFor(route: String): Pair<Section, Int>? = when (route) {
     Routes.LIMITS -> Section.LIMITS to 0
     Routes.NOTES -> Section.NOTES to 0
     Routes.PASSWORDS -> Section.PASSWORDS to 0
+    Routes.TASKS -> Section.TASKS to 0
     else -> null
 }
 
@@ -189,6 +194,7 @@ internal class ShellModels(
     val limits: LimitsViewModel,
     val news: NewsViewModel,
     val notes: NotesViewModel,
+    val tasks: TasksViewModel,
 )
 
 /**
@@ -222,6 +228,7 @@ internal fun ShellPageContent(
         Section.LIMITS -> LimitsShellPage(m.limits, page.inner) { go(Section.LIMITS, it) }
         Section.NOTES -> NotesBody(m.notes, page.inner, links.openNote, links.newNote)
         Section.PASSWORDS -> PasswordsScreen(m.vault, page.inner)
+        Section.TASKS -> TasksBody(m.tasks, page.inner, list, onOpenEmail = links.openEmail, onOpenNote = links.openNote)
         Section.MORE -> more()
     }
 }
@@ -248,7 +255,8 @@ fun MainShell(app: AppViewModel, target: String?, onTargetHandled: () -> Unit, l
     val limits: LimitsViewModel = viewModel()
     val news: NewsViewModel = viewModel()
     val notesVm: NotesViewModel = viewModel()
-    val models = ShellModels(app, mail, travel, vault, limits, news, notesVm)
+    val tasksVm: TasksViewModel = viewModel()
+    val models = ShellModels(app, mail, travel, vault, limits, news, notesVm, tasksVm)
 
     // The page the swipe started from. Swiping back into the part before it shows that part's first
     // page (Email's Activity, say), not its last; once the swipe settles, the real first page takes over.
@@ -381,6 +389,7 @@ fun MainShell(app: AppViewModel, target: String?, onTargetHandled: () -> Unit, l
             openNote = links.openNote,
             newNote = { links.newNote(false) },
             openPasswords = { go(Section.PASSWORDS) },
+            openTasks = { go(Section.TASKS) },
         )
     }
 
@@ -440,7 +449,7 @@ fun MainShell(app: AppViewModel, target: String?, onTargetHandled: () -> Unit, l
                 ShellPageContent(
                     page, list, models, links,
                     go = { s, inner -> go(s, inner) },
-                    home = { HomePage(cards, app, mail, travel, limits, news, notesVm, vault, list, homeActions) },
+                    home = { HomePage(cards, app, mail, travel, limits, news, notesVm, vault, tasksVm, list, homeActions) },
                     more = { MorePage(limits, vault, list, order = moreOrder, onOpen = { key -> openMore(key, links) }) },
                 )
             }
@@ -460,7 +469,7 @@ fun SectionScreen(key: String, startPage: Int, app: AppViewModel, links: ShellLi
         return
     }
     val mail: MailViewModel = viewModel()
-    val models = ShellModels(app, mail, viewModel(), viewModel(), viewModel(), viewModel(), viewModel())
+    val models = ShellModels(app, mail, viewModel(), viewModel(), viewModel(), viewModel(), viewModel(), viewModel())
     val pager = rememberPagerState(initialPage = startPage.coerceIn(0, section.pages.size - 1)) { section.pages.size }
     val scope = rememberCoroutineScope()
     val brand = LocalBrand.current
@@ -516,7 +525,7 @@ fun SectionScreen(key: String, startPage: Int, app: AppViewModel, links: ShellLi
 
 /** A part that has no place in the bar opens on a page of its own, laid out the same way. */
 private fun openOutside(section: Section, inner: Int, links: ShellLinks) = when (section) {
-    Section.EMAIL, Section.MONEY, Section.TRAVEL -> links.openSection(section.key, inner)
+    Section.EMAIL, Section.MONEY, Section.TRAVEL, Section.TASKS -> links.openSection(section.key, inner)
     Section.LIMITS -> links.limits(inner)
     Section.NEWS -> if (inner == 0) links.news() else links.openSection(section.key, inner)
     // Notes opens on its own route, so a note's page shares its notes (for Undo).

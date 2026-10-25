@@ -101,8 +101,9 @@ object Routes {
     const val MONEY_IN = "money/in"
     const val NEWS = "news"
     const val NOTES = "notes"
+    const val TASKS = "tasks"
 
-    val all = setOf(HOME, INSIGHTS, RECAP, PENDING, MONTHS, CATEGORIES, SETTINGS, ACCOUNT, LOG, EMAIL, PASSWORDS, TRAVEL, MONEY, EMAIL_SETUP, MORE, LIMITS, MONEY_IN, NEWS, NOTES)
+    val all = setOf(HOME, INSIGHTS, RECAP, PENDING, MONTHS, CATEGORIES, SETTINGS, ACCOUNT, LOG, EMAIL, PASSWORDS, TRAVEL, MONEY, EMAIL_SETUP, MORE, LIMITS, MONEY_IN, NEWS, NOTES, TASKS)
 
     /** Pages of the main screen (Home and the agents), as opposed to pages of their own. */
     val main = setOf(HOME, INSIGHTS, PENDING, MONTHS, CATEGORIES, EMAIL, TRAVEL, MONEY, MORE, MONEY_IN)
@@ -329,6 +330,7 @@ fun AppRoot(vm: AppViewModel, requestedRoute: String?, onRouteHandled: () -> Uni
                 )
             }
             composable(Routes.NOTES) { SectionScreen("notes", 0, vm, links(), onBack = { nav.popBackStack() }) }
+            composable(Routes.TASKS) { SectionScreen("tasks", 0, vm, links(), onBack = { nav.popBackStack() }) }
             composable(
                 "notes/edit/{id}?list={list}",
                 arguments = listOf(

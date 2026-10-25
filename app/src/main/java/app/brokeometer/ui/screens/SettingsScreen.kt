@@ -792,6 +792,7 @@ internal fun moreName(key: String): String = when (key) {
     "passwords" -> "Passwords"
     "notes" -> "Notes"
     "news" -> "News"
+    "tasks" -> "Tasks"
     else -> key
 }
 

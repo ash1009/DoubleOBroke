@@ -293,6 +293,10 @@ interface MailDao {
     @Query("SELECT * FROM mail_log WHERE id = :id")
     fun observeLogEntry(id: Long): Flow<MailLogEntity?>
 
+    /** The newest list entry for an email, by its Message-ID. */
+    @Query("SELECT id FROM mail_log WHERE messageId = :messageId ORDER BY id DESC LIMIT 1")
+    suspend fun logIdFor(messageId: String): Long?
+
     /**
      * How often the agent has dealt with this email before; an email put back with Undo, or one the
      * owner took out of spam, is left alone. Emails still waiting for a decision, or moved out of spam

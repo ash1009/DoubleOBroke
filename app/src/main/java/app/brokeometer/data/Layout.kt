@@ -12,7 +12,7 @@ data class HomeCard(val key: String, val on: Boolean = true)
 object Layout {
 
     /** Every feature, in the order the app starts with. */
-    val FEATURES = listOf("email", "money", "travel", "news", "limits", "notes", "passwords")
+    val FEATURES = listOf("email", "money", "travel", "news", "limits", "notes", "passwords", "tasks")
 
     /** Places in the bottom bar besides Home and More. */
     const val MAX_BAR = 3
@@ -25,6 +25,7 @@ object Layout {
         "limits" -> "App limits"
         "notes" -> "Notes"
         "passwords" -> "Passwords"
+        "tasks" -> "Tasks"
         else -> key
     }
 

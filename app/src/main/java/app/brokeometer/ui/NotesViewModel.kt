@@ -92,23 +92,44 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         app.scope.launch { lock.withLock { write(note) } }
     }
 
-    /** Leaving the editor: what's there is saved, and a note with nothing in it isn't kept. */
-    fun close(note: NoteEntity) {
+    /**
+     * Leaving the editor: what's there is saved, and a note with nothing in it isn't kept. When its words
+     * changed since it was opened ([start]), Tasks looks for dates in it again.
+     */
+    fun close(note: NoteEntity, start: NoteEntity? = null) {
         app.scope.launch {
             lock.withLock {
                 val old = dao.get(note.id) ?: return@withLock
                 if (old.deletedAt == null && note.isBlank) dao.delete(note.id) else write(note)
             }
+            val changed = start == null || start.title != note.title || start.body != note.body || start.items != note.items
+            if (changed && !note.isBlank && dao.get(note.id)?.deletedAt == null) {
+                val text = if (note.checklist) note.itemList.filter { !it.checked }.joinToString("\n") { it.text } else NoteText.plain(note.body)
+                tasks.scanNote(note.id, note.title, text)
+            }
         }
     }
 
-    /** The editor's note over the saved one. Its place and whether it's in the Bin are kept as they are. */
+    private val tasks get() = app.container.tasks
+
+    /**
+     * The editor's note over the saved one. Its place and whether it's in the Bin are kept as they are.
+     * A changed "Remind me" date (or the title of a note that has one) goes to Tasks.
+     */
     private suspend fun write(note: NoteEntity) {
         val old = dao.get(note.id) ?: return
         if (old.deletedAt != null) return
         val merged = note.copy(position = old.position, deletedAt = null)
         if (old.copy(updatedAt = 0) != merged.copy(updatedAt = 0)) dao.update(merged.copy(updatedAt = System.currentTimeMillis()))
+        val reminderMoved = old.remindDay != merged.remindDay || old.remindTime != merged.remindTime
+        if (reminderMoved || (merged.remindDay != null && old.title != merged.title)) {
+            tasks.noteReminder(merged.id, reminderTitle(merged), NoteRules.dayOf(merged.remindDay), merged.remindTime)
+        }
     }
+
+    /** A note's reminder in Tasks: its title, or the start of its words. */
+    private fun reminderTitle(n: NoteEntity): String =
+        n.title.ifBlank { (if (n.checklist) n.itemList.firstOrNull()?.text.orEmpty() else NoteText.plain(n.body)).lineSequence().firstOrNull().orEmpty().take(60) }
 
     /** A note just put in the Bin, and when, for the Notes page to offer Undo. */
     data class Binned(val note: NoteEntity, val at: Long)
@@ -124,6 +145,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
             lock.withLock { dao.setDeleted(note.id, System.currentTimeMillis()) }
+            tasks.noteGone(note.id)
             _binned.value = Binned(note, System.currentTimeMillis())
         }
     }
@@ -134,7 +156,14 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Takes a note out of the Bin, back where it was. */
     fun restore(id: Long) {
-        app.scope.launch { lock.withLock { dao.setDeleted(id, null) } }
+        app.scope.launch {
+            val n = lock.withLock {
+                dao.setDeleted(id, null)
+                dao.get(id)
+            } ?: return@launch
+            // Its reminder comes back with it.
+            if (n.remindDay != null) tasks.noteReminder(n.id, reminderTitle(n), NoteRules.dayOf(n.remindDay), n.remindTime)
+        }
     }
 
     fun deleteForever(id: Long) {
@@ -172,7 +201,10 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
                 val old = dao.get(note.id) ?: return@withLock
                 val now = System.currentTimeMillis()
                 dao.insert(
-                    old.copy(id = 0, pinned = false, keepKey = null, createdAt = now, updatedAt = now, position = (dao.firstPosition() ?: 0L) - 1, deletedAt = null),
+                    old.copy(
+                        id = 0, pinned = false, keepKey = null, createdAt = now, updatedAt = now, position = (dao.firstPosition() ?: 0L) - 1, deletedAt = null,
+                        remindDay = null, remindTime = null,
+                    ),
                 )
             }
         }

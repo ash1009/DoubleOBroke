@@ -87,6 +87,7 @@ internal class HomeActions(
     val openNote: (Long) -> Unit = {},
     val newNote: () -> Unit = {},
     val openPasswords: () -> Unit = {},
+    val openTasks: () -> Unit = {},
 )
 
 /**
@@ -103,6 +104,7 @@ internal fun HomePage(
     news: NewsViewModel,
     notes: NotesViewModel,
     vault: VaultViewModel,
+    tasks: app.brokeometer.ui.TasksViewModel,
     listState: LazyListState,
     actions: HomeActions,
 ) {
@@ -127,6 +129,7 @@ internal fun HomePage(
                 "limits" -> item("limits") { LimitsCard(limits, actions.openLimits) }
                 "notes" -> item("notes") { NotesHomeCard(notes, actions.openNotes, actions.openNote, actions.newNote) }
                 "passwords" -> item("passwords") { PasswordsHomeCard(vault, actions.openPasswords) }
+                "tasks" -> item("tasks") { TasksHomeCard(tasks, actions.openTasks) }
             }
         }
         if (cards.none { it.on }) {

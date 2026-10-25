@@ -19,6 +19,8 @@ import javax.mail.search.FromStringTerm
 import javax.mail.search.HeaderTerm
 import javax.mail.search.OrTerm
 import javax.mail.search.SubjectTerm
+import javax.mail.search.ComparisonTerm
+import javax.mail.search.ReceivedDateTerm
 
 /** One new email, as much as the agent needs to judge it. */
 data class MailItem(
@@ -34,7 +36,6 @@ data class MailItem(
     val text: String,
 )
 
-/** A whole email, for reading in the app. */
 /** An email found by a search of the whole mailbox. [uid] is its inbox UID when it's in the inbox, else 0. */
 data class FoundItem(
     val uid: Long,
@@ -45,6 +46,7 @@ data class FoundItem(
     val date: Long,
 )
 
+/** A whole email, for reading in the app. */
 data class FullEmail(
     val fromName: String,
     val fromAddress: String,
@@ -531,6 +533,39 @@ class MailSession(private val store: IMAPStore, private val provider: String, pr
             }
         }
         return out.distinctBy { it.messageId }.sortedByDescending { it.date }.take(max)
+    }
+
+    /**
+     * Emails from the last [days] days, newest first, at most [max], as the agent sees them: in Gmail all
+     * mail except promotions and social; elsewhere the inbox and the archive. Nothing is marked read.
+     */
+    fun recent(days: Long, max: Int): List<MailItem> {
+        val places = if (provider == MailProviders.GMAIL) listOfNotNull(allMail() ?: inbox())
+        else listOfNotNull(inbox(), archive()).distinctBy { it.fullName }
+        val since = java.util.Date(System.currentTimeMillis() - days * 24 * 60 * 60_000L)
+        val out = ArrayList<MailItem>()
+        for (f in places) {
+            f.open(Folder.READ_ONLY)
+            try {
+                val messages: Array<Message> = if (provider == MailProviders.GMAIL) {
+                    val uids = gmailSearch(f, "newer_than:${days}d -category:promotions -category:social").sortedDescending().take(max)
+                    if (uids.isEmpty()) emptyArray() else f.getMessagesByUID(uids.toLongArray()).filterNotNull().toTypedArray()
+                } else {
+                    f.search(ReceivedDateTerm(ComparisonTerm.GE, since)).takeLast(max).toTypedArray()
+                }
+                if (messages.isEmpty()) continue
+                f.fetch(messages, FetchProfile().apply {
+                    add(FetchProfile.Item.ENVELOPE)
+                    add(FetchProfile.Item.FLAGS)
+                    add(UIDFolder.FetchProfileItem.UID)
+                    add(FetchProfile.Item.CONTENT_INFO)
+                })
+                out += messages.mapNotNull { item(f, it) }
+            } finally {
+                runCatching { f.close(false) }
+            }
+        }
+        return out.distinctBy { it.messageId ?: "uid:${it.uid}" }.sortedByDescending { it.receivedAt }.take(max)
     }
 
     /** Whether this session can still be used (the server hasn't closed it). */

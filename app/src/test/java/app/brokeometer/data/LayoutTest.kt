@@ -10,7 +10,7 @@ class LayoutTest {
     fun cardsKeepTheirOrderAndSwitches() {
         val cards = listOf(HomeCard("money"), HomeCard("limits", on = false), HomeCard("email"))
         val text = Layout.encodeCards(Layout.cleanCards(cards))
-        assertEquals("money:1,limits:0,email:1,travel:1,news:1,notes:1,passwords:1", text)
+        assertEquals("money:1,limits:0,email:1,travel:1,news:1,notes:1,passwords:1,tasks:1", text)
         assertEquals(Layout.cleanCards(cards), Layout.decodeCards(text))
         assertNull(Layout.decodeCards(""))
     }
@@ -30,7 +30,7 @@ class LayoutTest {
         val order = listOf("notes", "email", "news", "money", "travel", "limits", "passwords")
         val ticked = setOf("email", "notes", "money")
         assertEquals(listOf("notes", "email", "money"), Layout.inBar(order, ticked))
-        assertEquals(listOf("news", "travel", "limits", "passwords"), Layout.underMore(order, ticked))
+        assertEquals(listOf("news", "travel", "limits", "passwords", "tasks"), Layout.underMore(order, ticked))
     }
 
     @Test
@@ -42,8 +42,8 @@ class LayoutTest {
     @Test
     fun theOldSettingsCarryOver() {
         val (cards, order, ticked) = Layout.fromOld(listOf("money", "email", "limits", "travel"), listOf("notes", "limits", "passwords", "news"))
-        assertEquals(listOf("money", "email", "limits", "travel", "news", "notes", "passwords"), cards.map { it.key })
-        assertEquals(listOf("money", "email", "travel", "notes", "limits", "passwords", "news"), order)
+        assertEquals(listOf("money", "email", "limits", "travel", "news", "notes", "passwords", "tasks"), cards.map { it.key })
+        assertEquals(listOf("money", "email", "travel", "notes", "limits", "passwords", "news", "tasks"), order)
         assertEquals(setOf("money", "email", "travel"), ticked)
     }
 }

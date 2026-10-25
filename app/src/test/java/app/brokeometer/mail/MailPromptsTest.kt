@@ -124,6 +124,21 @@ class MailPromptsTest {
     }
 
     @Test
+    fun aDatedTaskComesBackWithTheDecision() {
+        val prompt = MailPrompts.decideEmail(categories, item, java.time.LocalDate.of(2026, 10, 25))
+        assertTrue(prompt.contains("Today is Sunday 25 October 2026 (2026-10-25)"))
+        assertTrue(prompt.contains("\"task\":null"))
+        val d = MailPrompts.parseDecision(
+            """{"category":0,"summary":"Assessment invite","task":{"what":"Finish the WTW assessment","day":"2026-10-30","time":"17:00"}}""", 2,
+        )
+        assertEquals(MailPrompts.TaskHint("Finish the WTW assessment", "2026-10-30", "17:00"), d?.task)
+        // No real day, or no task: none.
+        assertNull(MailPrompts.parseDecision("""{"category":0,"summary":"x","task":{"what":"Reply","day":"soon"}}""", 2)?.task)
+        assertNull(MailPrompts.parseDecision("""{"category":0,"summary":"x","task":null}""", 2)?.task)
+        assertEquals(MailPrompts.TaskHint("Pay the bill", "2026-11-01"), MailPrompts.parseTask(org.json.JSONObject("""{"what":"Pay the bill","day":"2026-11-01","time":""}""")))
+    }
+
+    @Test
     fun spamAnswersLeanTowardsKeeping() {
         assertTrue(MailPrompts.checkSpam(item).startsWith("This email is in the spam folder"))
         assertEquals(MailPrompts.SpamVerdict(true, "Scam"), MailPrompts.parseSpam("""{"spam":true,"why":"Scam"}"""))

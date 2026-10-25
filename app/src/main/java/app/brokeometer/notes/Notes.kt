@@ -48,6 +48,9 @@ data class NoteEntity(
     val image: String? = null,
     /** Voice recordings in it: file paths, one per line, or null. */
     val audio: String? = null,
+    /** Its "Remind me" day ("2026-10-27") and time (minutes after midnight), or null: a task in Tasks. */
+    val remindDay: String? = null,
+    val remindTime: Int? = null,
 )
 
 /** The voice recordings' files. */
@@ -139,7 +142,7 @@ interface NotesDao {
     suspend fun deleteAll()
 }
 
-@Database(entities = [NoteEntity::class], version = 2, exportSchema = false)
+@Database(entities = [NoteEntity::class], version = 3, exportSchema = false)
 abstract class NotesDatabase : RoomDatabase() {
     abstract fun dao(): NotesDao
 
@@ -156,9 +159,17 @@ abstract class NotesDatabase : RoomDatabase() {
             }
         }
 
+        /** Version 3: a "Remind me" date on a note. */
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `notes` ADD COLUMN `remindDay` TEXT")
+                db.execSQL("ALTER TABLE `notes` ADD COLUMN `remindTime` INTEGER")
+            }
+        }
+
         fun create(context: Context): NotesDatabase =
             Room.databaseBuilder(context.applicationContext, NotesDatabase::class.java, "notes.db")
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build()
     }
 }

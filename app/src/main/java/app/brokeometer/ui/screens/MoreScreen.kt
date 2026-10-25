@@ -25,6 +25,7 @@ import androidx.compose.material.icons.rounded.HourglassBottom
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.DirectionsSubway
 import androidx.compose.material.icons.rounded.Lightbulb
+import androidx.compose.material.icons.rounded.TaskAlt
 import androidx.compose.material.icons.rounded.Mail
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Lock
@@ -121,6 +122,9 @@ internal fun MorePage(
                 }
                 "notes" -> item("notes") {
                     MoreRow(Icons.Rounded.Lightbulb, LocalBrand.current.action, "Notes", "Notes and lists, like Keep", onNotes)
+                }
+                "tasks" -> item("tasks") {
+                    MoreRow(Icons.Rounded.TaskAlt, LocalBrand.current.action, "Tasks", "From your emails, calendar and notes", { onOpen("tasks") })
                 }
                 "news" -> item("news") {
                     val news = (androidx.compose.ui.platform.LocalContext.current.applicationContext as app.brokeometer.BrokeApp).container.news

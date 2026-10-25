@@ -206,6 +206,9 @@ object NoteRules {
 
     fun binExpired(deletedAt: Long, now: Long): Boolean = now - deletedAt >= BIN_DAYS * 86_400_000L
 
+    /** A reminder's day ("2026-10-27"), or null. */
+    fun dayOf(text: String?): java.time.LocalDate? = text?.let { runCatching { java.time.LocalDate.parse(it) }.getOrNull() }
+
     /** Days left in the Bin, at least 1 while it's there. */
     fun daysLeft(deletedAt: Long, now: Long): Int =
         (BIN_DAYS - ((now - deletedAt) / 86_400_000L).toInt()).coerceIn(1, BIN_DAYS)

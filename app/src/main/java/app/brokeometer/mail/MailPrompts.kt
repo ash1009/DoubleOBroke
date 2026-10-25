@@ -159,7 +159,11 @@ object MailPrompts {
             "or written by a real person to them. Offers, sales, newsletters and general updates are not personal."
 
     /** Which category one new email belongs to, whether it's personal, and a line about it for the notification. */
-    fun decideEmail(categories: List<MailCategoryEntity>, item: MailItem): String = buildString {
+    /**
+     * The question for one new email. With [today], it also asks for a task: something the email gives the
+     * person to do or go to by a date, for Tasks.
+     */
+    fun decideEmail(categories: List<MailCategoryEntity>, item: MailItem, today: java.time.LocalDate? = null): String = buildString {
         appendLine("Categories:")
         categories.forEachIndexed { i, c -> appendLine("$i. ${c.name}: ${c.description}") }
         appendLine()
@@ -173,16 +177,44 @@ object MailPrompts {
         appendLine("Pick the one category this email belongs to, from what this email says, not who sent it: a bank can send a promo, a shop or an estate agent can send news about your own request.")
         appendLine(PERSONAL_RULE)
         appendLine("Write a summary of what it is or what it asks for, under 12 words, no greeting.")
-        append("""Answer with JSON only: {"category":0,"personal":false,"summary":"..."}""")
+        if (today == null) {
+            append("""Answer with JSON only: {"category":0,"personal":false,"summary":"..."}""")
+        } else {
+            val came = java.time.Instant.ofEpochMilli(item.receivedAt).atZone(java.time.ZoneId.systemDefault()).toLocalDate()
+            appendLine("Today is ${app.brokeometer.tasks.TaskRules.longDay(today)}. The email came on ${app.brokeometer.tasks.TaskRules.longDay(came)}.")
+            appendLine(TASK_RULE)
+            append("""Answer with JSON only: {"category":0,"personal":false,"summary":"...","task":null}""")
+        }
     }
 
-    data class Decision(val category: Int, val summary: String, val personal: Boolean = false)
+    /** What makes something in an email or a note a task, and how to write it. */
+    const val TASK_RULE =
+        "If it gives the person something they must do or go to on or by a date (a deadline, an interview, an assessment or " +
+            "form to finish, a bill or payment due, an appointment, a booking, a delivery to be in for), add " +
+            "\"task\": {\"what\":\"under 10 words, starting with a verb\",\"day\":\"YYYY-MM-DD\",\"time\":\"HH:MM, or empty\"}, " +
+            "using the day it is due or happens. Otherwise \"task\" is null: for offers, sales, newsletters, receipts, events " +
+            "they didn't sign up for, anything already past, and anything with no date."
+
+    /** Something to do or go to, as the AI wrote it: [day] is "YYYY-MM-DD", [time] "HH:MM" or null. */
+    data class TaskHint(val what: String, val day: String, val time: String? = null)
+
+    data class Decision(val category: Int, val summary: String, val personal: Boolean = false, val task: TaskHint? = null)
 
     fun parseDecision(text: String, categories: Int): Decision? {
         val root = jsonIn(text) ?: return null
         val c = root.optInt("category", -1)
         if (c !in 0 until categories) return null
-        return Decision(c, root.optString("summary").trim().take(120), root.optBoolean("personal", false))
+        return Decision(c, root.optString("summary").trim().take(120), root.optBoolean("personal", false), parseTask(root.optJSONObject("task")))
+    }
+
+    /** A task the AI wrote, when it has words and a real day. */
+    fun parseTask(o: JSONObject?): TaskHint? {
+        if (o == null) return null
+        val what = o.optString("what").trim().take(120)
+        val day = o.optString("day").trim()
+        if (what.isEmpty() || app.brokeometer.tasks.TaskRules.day(day) == null) return null
+        val time = o.optString("time").trim().takeIf { app.brokeometer.tasks.TaskRules.time(it) != null }
+        return TaskHint(what, day, time)
     }
 
     /** The emails a tidy-up answer marked as personal ("p": ["s1", "s4"]). */

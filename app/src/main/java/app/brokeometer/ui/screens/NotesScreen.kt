@@ -49,6 +49,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.outlined.NotificationAdd
+import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AddPhotoAlternate
 import androidx.compose.material.icons.rounded.Check
@@ -562,6 +564,13 @@ internal fun NoteCard(n: NoteEntity, compact: Boolean = false, onLongClick: (() 
             } else if (n.body.isNotBlank()) {
                 Text(styledText(n.body), style = MaterialTheme.typography.bodyMedium, maxLines = if (compact) 4 else 12, overflow = TextOverflow.Ellipsis)
             }
+            NoteRules.dayOf(n.remindDay)?.let { day ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.NotificationsActive, contentDescription = null, tint = muted, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(app.brokeometer.tasks.TaskRules.whenText(day, n.remindTime, java.time.LocalDate.now()), style = MaterialTheme.typography.bodySmall, color = muted)
+                }
+            }
             val voices = n.recordings.size
             if (voices > 0) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -831,6 +840,11 @@ private fun NoteEditor(start: NoteEntity, vm: NotesViewModel, onBack: () -> Unit
     var photoBusy by remember { mutableStateOf(false) }
     var headings by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    // "Remind me": a day, and maybe a time; it shows in Tasks.
+    var remindDay by remember { mutableStateOf(NoteRules.dayOf(start.remindDay)) }
+    var remindTime by remember { mutableStateOf(start.remindTime) }
+    var pickingDay by remember { mutableStateOf(false) }
+    var pickingTime by remember { mutableStateOf<java.time.LocalDate?>(null) }
 
     fun current(): NoteEntity = start.copy(
         title = title,
@@ -842,6 +856,8 @@ private fun NoteEditor(start: NoteEntity, vm: NotesViewModel, onBack: () -> Unit
         image = image,
         audio = voices.joinToString("\n").ifEmpty { null },
         pinned = pinned,
+        remindDay = remindDay?.toString(),
+        remindTime = remindTime.takeIf { remindDay != null },
     )
 
     // Saves a moment after each change, and when leaving.
@@ -851,7 +867,7 @@ private fun NoteEditor(start: NoteEntity, vm: NotesViewModel, onBack: () -> Unit
         vm.save(snapshot)
     }
     DisposableEffect(Unit) {
-        onDispose { vm.close(current()) }
+        onDispose { vm.close(current(), start) }
     }
     BackHandler { onBack() }
 
@@ -905,6 +921,13 @@ private fun NoteEditor(start: NoteEntity, vm: NotesViewModel, onBack: () -> Unit
             Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back") }
                 Spacer(Modifier.weight(1f))
+                IconButton(onClick = { pickingDay = true }) {
+                    Icon(
+                        if (remindDay != null) Icons.Rounded.NotificationsActive else Icons.Outlined.NotificationAdd,
+                        contentDescription = "Remind me",
+                        tint = if (remindDay != null) brand.action else ink,
+                    )
+                }
                 IconButton(onClick = { pinned = !pinned }) {
                     Icon(if (pinned) Icons.Rounded.PushPin else Icons.Outlined.PushPin, contentDescription = if (pinned) "Unpin" else "Pin", tint = if (pinned) brand.action else ink)
                 }
@@ -921,6 +944,30 @@ private fun NoteEditor(start: NoteEntity, vm: NotesViewModel, onBack: () -> Unit
                         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                         modifier = Modifier.fillMaxWidth(),
                     )
+                }
+                remindDay?.let { day ->
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        Modifier
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.85f))
+                            .clickable { pickingDay = true }
+                            .padding(start = 12.dp, end = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Rounded.NotificationsActive, contentDescription = null, tint = brand.action, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            app.brokeometer.tasks.TaskRules.whenText(day, remindTime, java.time.LocalDate.now()),
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                        IconButton(onClick = {
+                            remindDay = null
+                            remindTime = null
+                        }, modifier = Modifier.size(36.dp)) {
+                            Icon(Icons.Rounded.Close, contentDescription = "No reminder", tint = muted, modifier = Modifier.size(16.dp))
+                        }
+                    }
                 }
                 if (voices.isNotEmpty()) {
                     Spacer(Modifier.height(12.dp))
@@ -1026,6 +1073,50 @@ private fun NoteEditor(start: NoteEntity, vm: NotesViewModel, onBack: () -> Unit
             },
             onPhoto = { runCatching { pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) } },
             onDismiss = { styling = false },
+        )
+    }
+
+    if (pickingDay) {
+        val utc = java.time.ZoneOffset.UTC
+        val state = androidx.compose.material3.rememberDatePickerState(
+            initialSelectedDateMillis = (remindDay ?: java.time.LocalDate.now().plusDays(1)).atStartOfDay(utc).toInstant().toEpochMilli(),
+        )
+        androidx.compose.material3.DatePickerDialog(
+            onDismissRequest = { pickingDay = false },
+            confirmButton = {
+                TextButton(
+                    enabled = state.selectedDateMillis != null,
+                    onClick = {
+                        pickingDay = false
+                        state.selectedDateMillis?.let { pickingTime = java.time.Instant.ofEpochMilli(it).atZone(utc).toLocalDate() }
+                    },
+                ) { Text("Next", color = brand.action) }
+            },
+            dismissButton = { TextButton(onClick = { pickingDay = false }) { Text("Cancel") } },
+        ) {
+            androidx.compose.material3.DatePicker(state = state, title = { Text("Remind me on", modifier = Modifier.padding(start = 24.dp, top = 16.dp)) }, showModeToggle = false)
+        }
+    }
+    pickingTime?.let { day ->
+        val t = androidx.compose.material3.rememberTimePickerState(initialHour = (remindTime ?: 9 * 60) / 60, initialMinute = (remindTime ?: 9 * 60) % 60, is24Hour = true)
+        AlertDialog(
+            onDismissRequest = { pickingTime = null },
+            title = { Text("At a time?") },
+            text = { androidx.compose.material3.TimePicker(state = t) },
+            confirmButton = {
+                TextButton(onClick = {
+                    remindDay = day
+                    remindTime = t.hour * 60 + t.minute
+                    pickingTime = null
+                }) { Text("Set time", color = brand.action) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    remindDay = day
+                    remindTime = null
+                    pickingTime = null
+                }) { Text("No time") }
+            },
         )
     }
 

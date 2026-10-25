@@ -42,6 +42,8 @@ class InboxAgent(
     private val repository: app.brokeometer.data.Repository,
     /** An email you were just told about (its list entry), to fetch ahead so it opens at once. */
     private val onTold: (Long) -> Unit = {},
+    /** Where tasks found in emails go (Tasks), if anywhere. */
+    private val tasks: TaskSink? = null,
     private val client: MailClient = MailClient(),
 ) {
     private val lock = Mutex()
@@ -422,10 +424,11 @@ class InboxAgent(
                     val id = save(entry(category, MailActions.NOTIFIED, summary))
                     notifier.important(entry(category, MailActions.NOTIFIED, summary).copy(id = id), account)
                     onTold(id)
+                    decision.task?.let { tasks?.fromEmail(account.id, id, item, it) }
                 } else {
                     val archived = runCatching { s.archive(item.uid) }.getOrDefault(false)
                     val read = archived || runCatching { s.markRead(MailFolders.INBOX, item.uid) }.isSuccess
-                    when {
+                    val id = when {
                         archived -> save(entry(category, MailActions.ARCHIVED, decision.summary))
                         read -> save(entry(category, MailActions.MARKED_READ, decision.summary + " It couldn't be archived, so it was marked read in your inbox."))
                         else -> {
@@ -434,6 +437,7 @@ class InboxAgent(
                         }
                     }
                     sortedNow()
+                    decision.task?.let { tasks?.fromEmail(account.id, id, item, it) }
                 }
                 learn(account, item, category)
                 true
@@ -665,7 +669,7 @@ class InboxAgent(
     private fun clearAiTrouble() = mail.clearNoteStarting(AI_TROUBLE)
 
     private sealed interface Decision {
-        data class Made(val category: MailCategoryEntity, val summary: String, val personal: Boolean) : Decision
+        data class Made(val category: MailCategoryEntity, val summary: String, val personal: Boolean, val task: MailPrompts.TaskHint? = null) : Decision
         data class Undecided(val why: String) : Decision
     }
 
@@ -674,11 +678,13 @@ class InboxAgent(
      * alone: if the AI can't be reached, the email stays unread with its notification until it can.
      */
     private suspend fun decide(item: MailItem, categories: List<MailCategoryEntity>): Decision {
-        val reply = mail.ask(MailPrompts.decideEmail(categories, item), maxTokens = 300)
+        // With Tasks taking emails, the same question also asks for anything to do by a date.
+        val today = if (tasks?.wantsEmailTasks() == true) java.time.LocalDate.now() else null
+        val reply = mail.ask(MailPrompts.decideEmail(categories, item, today), maxTokens = if (today != null) 400 else 300)
         val decision = (reply as? Brain.Answer.Text)?.let { MailPrompts.parseDecision(it.text, categories.size) }
         if (decision != null) {
             clearAiTrouble()
-            return Decision.Made(categories[decision.category], decision.summary.ifBlank { item.subject }, decision.personal)
+            return Decision.Made(categories[decision.category], decision.summary.ifBlank { item.subject }, decision.personal, decision.task)
         }
         if (reply is Brain.Answer.Failed) aiTrouble(reply.message)
         val why = when (reply) {

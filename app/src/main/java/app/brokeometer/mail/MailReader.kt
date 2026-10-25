@@ -202,6 +202,10 @@ class MailReader(
     suspend fun search(account: MailAccountEntity, query: String, max: Int = SEARCH_MAX): List<FoundItem> =
         withSession(account) { s -> s.search(query, max) }
 
+    /** Emails from the last [days] days, newest first, as the agent sees them. Throws when it can't be reached. */
+    suspend fun recent(account: MailAccountEntity, days: Long, max: Int): List<MailItem> =
+        withSession(account) { s -> s.recent(days, max) }
+
     /** An attached file of an email, saved in the app's cache to open with another app. */
     data class Saved(val file: File, val type: String)
 

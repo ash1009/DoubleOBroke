@@ -27,6 +27,9 @@ import app.brokeometer.mail.MailReader
 import app.brokeometer.mail.StarredMail
 import app.brokeometer.data.LogKinds
 import app.brokeometer.news.NewsAgent
+import app.brokeometer.tasks.TaskAgent
+import app.brokeometer.tasks.TaskWorker
+import app.brokeometer.tasks.TasksDatabase
 import app.brokeometer.news.NewsWorker
 import app.brokeometer.notes.NotesDatabase
 import app.brokeometer.data.FxUpdater
@@ -59,6 +62,13 @@ class BrokeApp : Application() {
         if (container.prefs.backupFolder.value != null) BackupManager.schedule(this)
         if (container.prefs.mailAgentOn.value) InboxAgent.schedule(this)
         if (container.news.on.value) NewsWorker.schedule(this)
+        TaskWorker.schedule(this)
+        scope.launch {
+            runCatching { container.tasks.syncCalendar() }
+            runCatching { container.tasks.check() }
+        }
+        // Once: the last two weeks of email, for tasks still to come.
+        if (container.prefs.mailAgentOn.value) container.tasks.lookBackOnce()
         TravelTracker.ensureChannel(this)
         if (container.prefs.trackTrips.value) {
             TravelTracker.sync(this)
@@ -88,8 +98,10 @@ class AppContainer(app: BrokeApp) {
     val mail = MailAgent(app, mailDatabase.dao(), prefs, claude, gemini, app.scope)
     val mailNotifier = MailNotifier(app)
     val mailReader = MailReader(mailDatabase.dao(), prefs, mail, java.io.File(app.cacheDir, "mail"))
+    val tasksDatabase: TasksDatabase = TasksDatabase.create(app)
+    val tasks = TaskAgent(app, tasksDatabase.dao(), mailDatabase.dao(), mail, mailReader, app.scope)
     // An email you're told about is fetched straight away, so it opens at once from the notification.
-    val inboxAgent = InboxAgent(app, mailDatabase.dao(), prefs, mail, mailNotifier, app.scope, repository, onTold = { mailReader.prefetch(listOf(it)) })
+    val inboxAgent = InboxAgent(app, mailDatabase.dao(), prefs, mail, mailNotifier, app.scope, repository, onTold = { mailReader.prefetch(listOf(it)) }, tasks = tasks)
     val starredMail = StarredMail(mailDatabase.dao(), prefs, mail)
     val news = NewsAgent(app, claude) { text, outcome -> repository.log(LogKinds.NEWS_SOURCE, "News", text, outcome) }
     val notesDatabase: NotesDatabase = NotesDatabase.create(app)
