@@ -29,6 +29,11 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.TaskAlt
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.SelectAll
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.foundation.combinedClickable
+import androidx.activity.compose.BackHandler
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
@@ -95,10 +100,18 @@ internal fun TasksBody(
     }
 }
 
-/** Still to do: overdue first, then today, tomorrow, this week, later, and ones with no date. */
+/**
+ * Still to come: today, tomorrow, this week, later, and ones with no date (ones whose day has gone by are
+ * put away). Hold one to pick several, then mark them done or delete them together.
+ */
 @Composable
 private fun UpcomingPage(vm: TasksViewModel, listState: LazyListState, onOpenEmail: (Long) -> Unit, onOpenNote: (Long) -> Unit) {
     val open by vm.open.collectAsStateWithLifecycle()
+    var picked by remember { mutableStateOf(setOf<Long>()) }
+    val picking = picked.isNotEmpty()
+    BackHandler(enabled = picking) { picked = emptySet() }
+    val pickedTasks = remember(open, picked) { open.filter { it.id in picked } }
+    val toggle: (TaskEntity) -> Unit = { t -> picked = if (t.id in picked) picked - t.id else picked + t.id }
     var adding by remember { mutableStateOf(false) }
     var showing by remember { mutableStateOf<TaskEntity?>(null) }
     var changing by remember { mutableStateOf<TaskEntity?>(null) }
@@ -119,7 +132,31 @@ private fun UpcomingPage(vm: TasksViewModel, listState: LazyListState, onOpenEma
     }
 
     Box(Modifier.fillMaxSize()) {
-        LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 110.dp)) {
+        Column(Modifier.fillMaxSize()) {
+        if (picking) {
+            TaskPickBar(
+                count = pickedTasks.size,
+                onClose = { picked = emptySet() },
+                onAll = { picked = open.map { it.id }.toSet() },
+                actions = listOf(
+                    PickAction(Icons.Rounded.CheckCircle, "Mark done", brand.action) {
+                        val list = pickedTasks
+                        vm.setDone(list, true)
+                        picked = emptySet()
+                        scope.launch {
+                            snackbar.currentSnackbarData?.dismiss()
+                            val r = snackbar.showSnackbar("${list.size} done", actionLabel = "Undo", duration = SnackbarDuration.Short)
+                            if (r == SnackbarResult.ActionPerformed) vm.setDone(list, false)
+                        }
+                    },
+                    PickAction(Icons.Outlined.Delete, "Delete", brand.broke) {
+                        vm.delete(pickedTasks)
+                        picked = emptySet()
+                    },
+                ),
+            )
+        }
+        LazyColumn(Modifier.fillMaxWidth().weight(1f), state = listState, contentPadding = PaddingValues(bottom = 110.dp)) {
             if (open.isEmpty()) {
                 item("empty") {
                     EmptyNote(
@@ -132,11 +169,24 @@ private fun UpcomingPage(vm: TasksViewModel, listState: LazyListState, onOpenEma
                 val list = groups[g] ?: return@forEach
                 item("g-$g") { SectionTitle(g.label) }
                 items(list, key = { it.id }) { t ->
-                    TaskRow(t, today, overdue = g == TaskRules.Group.OVERDUE, onTick = { tick(t) }, onClick = { showing = t })
+                    TaskRow(
+                        t, today, overdue = g == TaskRules.Group.OVERDUE,
+                        picked = t.id in picked,
+                        onTick = { if (picking) toggle(t) else tick(t) },
+                        onClick = {
+                            if (picking) {
+                                toggle(t)
+                            } else {
+                                showing = t
+                            }
+                        },
+                        onLongClick = { toggle(t) },
+                    )
                 }
             }
         }
-        ExtendedFloatingActionButton(
+        }
+        if (!picking) ExtendedFloatingActionButton(
             onClick = { adding = true },
             containerColor = brand.action,
             contentColor = brand.onAction,
@@ -188,14 +238,25 @@ private fun UpcomingPage(vm: TasksViewModel, listState: LazyListState, onOpenEma
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun TaskRow(t: TaskEntity, today: LocalDate, overdue: Boolean, done: Boolean = false, onTick: () -> Unit, onClick: () -> Unit) {
+private fun TaskRow(
+    t: TaskEntity,
+    today: LocalDate,
+    overdue: Boolean,
+    done: Boolean = false,
+    picked: Boolean = false,
+    onTick: () -> Unit,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+) {
     val brand = LocalBrand.current
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .background(if (picked) brand.action.copy(alpha = 0.22f) else androidx.compose.ui.graphics.Color.Transparent)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(start = 8.dp, end = 16.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -349,17 +410,72 @@ private fun TimeDialog(start: Int, onDismiss: () -> Unit, onClear: (() -> Unit)?
     )
 }
 
-/** Done: newest first. Tap one to put it back. */
+/** Done: newest first. Tap one to put it back; hold to pick several, to put back or delete. */
 @Composable
 private fun DonePage(vm: TasksViewModel, listState: LazyListState) {
     val done by vm.done.collectAsStateWithLifecycle()
     val today = LocalDate.now()
-    LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(top = 8.dp, bottom = 40.dp)) {
-        if (done.isEmpty()) {
-            item("empty") { EmptyNote("Nothing done yet", "Tick a task and it comes here. Tap one here to put it back.") }
+    val brand = LocalBrand.current
+    var picked by remember { mutableStateOf(setOf<Long>()) }
+    val picking = picked.isNotEmpty()
+    BackHandler(enabled = picking) { picked = emptySet() }
+    val pickedTasks = remember(done, picked) { done.filter { it.id in picked } }
+    val toggle: (TaskEntity) -> Unit = { t -> picked = if (t.id in picked) picked - t.id else picked + t.id }
+    Column(Modifier.fillMaxSize()) {
+        if (picking) {
+            TaskPickBar(
+                count = pickedTasks.size,
+                onClose = { picked = emptySet() },
+                onAll = { picked = done.map { it.id }.toSet() },
+                actions = listOf(
+                    PickAction(Icons.Rounded.RadioButtonUnchecked, "Not done", brand.action) {
+                        vm.setDone(pickedTasks, false)
+                        picked = emptySet()
+                    },
+                    PickAction(Icons.Outlined.Delete, "Delete", brand.broke) {
+                        vm.delete(pickedTasks)
+                        picked = emptySet()
+                    },
+                ),
+            )
         }
-        items(done, key = { it.id }) { t ->
-            TaskRow(t, today, overdue = false, done = true, onTick = { vm.setDone(t, false) }, onClick = { vm.setDone(t, false) })
+        LazyColumn(Modifier.fillMaxWidth().weight(1f), state = listState, contentPadding = PaddingValues(top = 8.dp, bottom = 40.dp)) {
+            if (done.isEmpty()) {
+                item("empty") { EmptyNote("Nothing done yet", "Tick a task and it comes here. Tap one here to put it back.") }
+            }
+            items(done, key = { it.id }) { t ->
+                TaskRow(
+                    t, today, overdue = false, done = true,
+                    picked = t.id in picked,
+                    onTick = { if (picking) toggle(t) else vm.setDone(t, false) },
+                    onClick = { if (picking) toggle(t) else vm.setDone(t, false) },
+                    onLongClick = { toggle(t) },
+                )
+            }
+        }
+    }
+}
+
+/** One thing to do with the picked tasks. */
+private class PickAction(val icon: androidx.compose.ui.graphics.vector.ImageVector, val label: String, val tint: androidx.compose.ui.graphics.Color, val run: () -> Unit)
+
+/** Shown while picking several: how many, pick all, and what to do with them. */
+@Composable
+private fun TaskPickBar(count: Int, onClose: () -> Unit, onAll: () -> Unit, actions: List<PickAction>) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        androidx.compose.material3.IconButton(onClick = onClose) { Icon(Icons.Rounded.Close, contentDescription = "Stop picking") }
+        Text("$count picked", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+        androidx.compose.material3.IconButton(onClick = onAll) { Icon(Icons.Rounded.SelectAll, contentDescription = "Pick all") }
+        actions.forEach { a ->
+            androidx.compose.material3.IconButton(onClick = a.run) { Icon(a.icon, contentDescription = a.label, tint = a.tint) }
         }
     }
 }
@@ -374,6 +490,7 @@ private fun TasksSetupPage(vm: TasksViewModel, listState: LazyListState) {
     val own by vm.ownReminders.collectAsStateWithLifecycle()
     val lookBack by vm.lookBack.collectAsStateWithLifecycle()
     val lookingBack by vm.lookingBack.collectAsStateWithLifecycle()
+    val calendarProblem by vm.calendarProblem.collectAsStateWithLifecycle()
     var pickingSummary by remember { mutableStateOf(false) }
     val brand = LocalBrand.current
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -407,11 +524,12 @@ private fun TasksSetupPage(vm: TasksViewModel, listState: LazyListState) {
                         "the sooner of two limits is used, and a test with no date gets 3 days.",
                     fromEmail,
                 ) { vm.setFromEmail(it) }
-                SetupSwitch("Calendar", "Only events you add to your own calendar, read on the phone. Birthdays, holidays, calendars you follow and invitations are left out.", fromCalendar) { on ->
+                SetupSwitch("Calendar", "Only events you create in your own Google calendar, read on the phone. Birthdays, holidays, calendars you follow and invitations from others are left out.", fromCalendar) { on ->
                     if (!on) vm.setFromCalendar(false)
                     else if (vm.canReadCalendar()) vm.setFromCalendar(true)
                     else askCalendar.launch(Manifest.permission.READ_CALENDAR)
                 }
+                if (fromCalendar) calendarProblem?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = brand.broke) }
                 SetupSwitch("Notes", "When you leave a note, the AI looks for dates in it. You can also set Remind me on a note yourself.", fromNotes) { vm.setFromNotes(it) }
             }
         }

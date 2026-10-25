@@ -27,11 +27,14 @@ class TasksViewModel(application: Application) : AndroidViewModel(application) {
     val ownReminders = agent.ownReminders
     val lookBack = agent.lookBack
     val lookingBack = agent.lookingBack
+    val calendarProblem = agent.calendarProblem
 
     fun add(title: String, day: LocalDate?, time: Int?) = agent.add(title, day, time)
     fun change(task: TaskEntity, title: String, day: LocalDate?, time: Int?) = agent.change(task, title, day, time)
     fun setDone(task: TaskEntity, done: Boolean) = agent.setDone(task, done)
     fun delete(task: TaskEntity) = agent.delete(task)
+    fun setDone(tasks: List<TaskEntity>, done: Boolean) = agent.setDone(tasks, done)
+    fun delete(tasks: List<TaskEntity>) = agent.delete(tasks)
 
     fun setFromEmail(on: Boolean) = agent.setFromEmail(on)
     fun setFromCalendar(on: Boolean) = agent.setFromCalendar(on)

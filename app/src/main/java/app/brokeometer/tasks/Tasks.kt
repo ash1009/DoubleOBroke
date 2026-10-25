@@ -99,6 +99,13 @@ interface TasksDao {
     @Query("UPDATE tasks SET done = :done, doneAt = :at WHERE id = :id")
     suspend fun setDone(id: Long, done: Boolean, at: Long?)
 
+    /** Ones whose day has gone by are put away: only what's coming matters. */
+    @Query("UPDATE tasks SET dismissed = 1 WHERE done = 0 AND dismissed = 0 AND day IS NOT NULL AND day < :today")
+    suspend fun putAwayPast(today: String)
+
+    @Query("UPDATE tasks SET done = :done, doneAt = :at WHERE id IN (:ids)")
+    suspend fun setDoneMany(ids: List<Long>, done: Boolean, at: Long?)
+
     @Query("UPDATE tasks SET remindedAt = :at WHERE id IN (:ids)")
     suspend fun setReminded(ids: List<Long>, at: Long)
 

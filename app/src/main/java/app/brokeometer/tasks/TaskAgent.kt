@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -130,6 +131,14 @@ class TaskAgent(
         scope.launch { lock.withLock { dao.setDone(task.id, done, if (done) System.currentTimeMillis() else null) } }
     }
 
+    /** Several at once, picked on the list. */
+    fun setDone(tasks: List<TaskEntity>, done: Boolean) {
+        if (tasks.isEmpty()) return
+        scope.launch { lock.withLock { dao.setDoneMany(tasks.map { it.id }, done, if (done) System.currentTimeMillis() else null) } }
+    }
+
+    fun delete(tasks: List<TaskEntity>) = tasks.forEach { delete(it) }
+
     /** Yours go; ones from an email, the calendar or a note are kept hidden, so they don't come back. */
     fun delete(task: TaskEntity) {
         scope.launch {
@@ -169,6 +178,8 @@ class TaskAgent(
     private suspend fun keepFromEmail(accountId: Long, logId: Long?, item: MailItem, task: MailPrompts.TaskHint): Boolean {
         val came = Instant.ofEpochMilli(item.receivedAt).atZone(ZoneId.systemDefault()).toLocalDate()
         val day = task.dueDay(came) ?: return false
+        // Only what's still to come.
+        if (day.isBefore(LocalDate.now())) return false
         val key = "$accountId:${item.messageId ?: "uid${item.uid}"}"
         val from = item.fromName.ifBlank { item.fromAddress }
         return lock.withLock {
@@ -310,10 +321,21 @@ class TaskAgent(
      */
     suspend fun syncCalendar() {
         if (!_fromCalendar.value || !canReadCalendar()) return
+        // Read with older rules: what came from the calendar goes, and is read again the new way.
+        if (sp.getInt(KEY_CALENDAR_VERSION, 0) < CALENDAR_VERSION) {
+            lock.withLock { dao.bySource(TaskSource.CALENDAR).filter { !it.done }.forEach { dao.delete(it.id) } }
+            sp.edit().putInt(KEY_CALENDAR_VERSION, CALENDAR_VERSION).putBoolean(KEY_CALENDAR_SYNCED, false).apply()
+        }
         val zone = ZoneId.systemDefault()
         val start = LocalDate.now().atStartOfDay(zone).toInstant().toEpochMilli()
         val end = start + TaskRules.CALENDAR_DAYS * 24 * 60 * 60_000L
-        val events = runCatching { readCalendar(start, end, zone) }.getOrNull() ?: return
+        val events = try {
+            readCalendar(start, end, zone)
+        } catch (e: Exception) {
+            _calendarProblem.value = "Couldn't read your calendar (${e.javaClass.simpleName}). It's tried again in 15 minutes."
+            return
+        }
+        _calendarProblem.value = null
         val first = !sp.getBoolean(KEY_CALENDAR_SYNCED, false)
         val now = System.currentTimeMillis()
         lock.withLock {
@@ -328,39 +350,68 @@ class TaskAgent(
                     dao.update(old.copy(title = e.title, detail = e.detail))
                 }
             }
+            // Anything no longer on your calendar (or no longer counted) goes.
             val keys = events.map { it.key }.toSet()
-            had.values.filter { !it.done && it.sourceKey !in keys && (TaskRules.day(it.day)?.isBefore(LocalDate.now()) == false) }.forEach { dao.delete(it.id) }
+            had.values.filter { !it.done && it.sourceKey !in keys }.forEach { dao.delete(it.id) }
         }
         sp.edit().putBoolean(KEY_CALENDAR_SYNCED, true).apply()
     }
 
+    private val _calendarProblem = MutableStateFlow<String?>(null)
+    /** Why the calendar couldn't be read last time, or null. */
+    val calendarProblem: StateFlow<String?> = _calendarProblem
+
     private data class CalendarEvent(val key: String, val title: String, val detail: String, val day: LocalDate, val time: Int?)
 
+    /**
+     * Your own calendars: each Google account's main calendar (the one that belongs to the account
+     * itself). Calendars you follow (sports, holidays), birthdays, and calendars made by other apps on
+     * the phone belong to something else, so they're left out.
+     */
+    private fun ownCalendars(): Map<Long, String> {
+        val out = HashMap<Long, String>()
+        val projection = arrayOf(
+            CalendarContract.Calendars._ID,
+            CalendarContract.Calendars.ACCOUNT_NAME,
+            CalendarContract.Calendars.ACCOUNT_TYPE,
+            CalendarContract.Calendars.OWNER_ACCOUNT,
+        )
+        context.contentResolver.query(CalendarContract.Calendars.CONTENT_URI, projection, null, null, null)?.use { c ->
+            while (c.moveToNext()) {
+                val account = c.getString(1).orEmpty().trim()
+                val type = c.getString(2).orEmpty()
+                val owner = c.getString(3).orEmpty().trim()
+                if (type == GOOGLE && account.isNotEmpty() && owner.equals(account, ignoreCase = true)) out[c.getLong(0)] = account
+            }
+        }
+        return out
+    }
+
+    /** Events you made yourself in your own calendars: you're their organiser (or none is named). */
     private fun readCalendar(start: Long, end: Long, zone: ZoneId): List<CalendarEvent> {
+        val own = ownCalendars()
+        if (own.isEmpty()) return emptyList()
+        val uri = CalendarContract.Instances.CONTENT_URI.buildUpon().also {
+            ContentUris.appendId(it, start)
+            ContentUris.appendId(it, end)
+        }.build()
         val projection = arrayOf(
             CalendarContract.Instances.EVENT_ID,
             CalendarContract.Instances.TITLE,
             CalendarContract.Instances.BEGIN,
             CalendarContract.Instances.ALL_DAY,
             CalendarContract.Instances.EVENT_LOCATION,
-            CalendarContract.Instances.OWNER_ACCOUNT,
-            CalendarContract.Instances.SELF_ATTENDEE_STATUS,
-            CalendarContract.Instances.VISIBLE,
-            CalendarContract.Instances.CALENDAR_ACCESS_LEVEL,
+            CalendarContract.Instances.CALENDAR_ID,
             CalendarContract.Instances.ORGANIZER,
         )
         val out = ArrayList<CalendarEvent>()
-        CalendarContract.Instances.query(context.contentResolver, projection, start, end)?.use { c ->
+        val where = "${CalendarContract.Instances.CALENDAR_ID} IN (${own.keys.joinToString(",")})"
+        context.contentResolver.query(uri, projection, where, null, null)?.use { c ->
             while (c.moveToNext()) {
-                val owner = c.getString(5).orEmpty()
-                // Only events you put in your own calendar: not holidays, birthdays, or calendars you
-                // follow (like a sports one), and not invitations from others.
-                if ("#holiday" in owner || "#contacts" in owner) continue
-                if (c.getInt(7) == 0) continue
-                if (c.getInt(8) < CalendarContract.Calendars.CAL_ACCESS_OWNER) continue
-                val organizer = c.getString(9).orEmpty().trim()
-                if (organizer.isNotEmpty() && !organizer.equals(owner, ignoreCase = true)) continue
-                if (c.getInt(6) == CalendarContract.Attendees.ATTENDEE_STATUS_DECLINED) continue
+                val account = own[c.getLong(5)] ?: continue
+                val organizer = c.getString(6).orEmpty().trim()
+                // Invitations from other people are theirs, not yours.
+                if (organizer.isNotEmpty() && !organizer.equals(account, ignoreCase = true)) continue
                 val title = c.getString(1)?.trim().orEmpty().ifEmpty { "(No title)" }
                 val begin = c.getLong(2)
                 val allDay = c.getInt(3) == 1
@@ -388,6 +439,7 @@ class TaskAgent(
         lock.withLock {
             val now = ZonedDateTime.now()
             val nowMs = now.toInstant().toEpochMilli()
+            dao.putAwayPast(now.toLocalDate().toString())
             val open = dao.open()
             val summaryAt = _summaryAt.value
             if (TaskRules.summaryDue(now, summaryAt, lastSummaryAt())) {
@@ -495,6 +547,10 @@ class TaskAgent(
         private const val KEY_LOOK_BACK = "look_back"
         private const val KEY_LOOKED_BACK = "looked_back"
         private const val KEY_CALENDAR_SYNCED = "calendar_synced"
+        /** The calendar is read again from scratch when its rules change. */
+        private const val CALENDAR_VERSION = 2
+        private const val KEY_CALENDAR_VERSION = "calendar_version"
+        private const val GOOGLE = "com.google"
     }
 }
 
