@@ -1,6 +1,7 @@
 package app.brokeometer.mail
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -77,5 +78,14 @@ class AlertMatcherTest {
         val entries = listOf(entry(15, 1, "", MailActions.READ_ELSEWHERE, from = "Mum"))
         val r = AlertMatcher.match(listOf(alert("k4", null, "Mum", "(no subject)")), entries, accounts)
         assertEquals(listOf("k4"), r.clear)
+    }
+
+    @Test
+    fun theEmailAppsOwnStatusIsNotAnEmail() {
+        assertTrue(AlertMatcher.isStatus("Syncing mail", ongoing = false))
+        assertTrue(AlertMatcher.isStatus("Checking for mail…", ongoing = false))
+        assertTrue(AlertMatcher.isStatus("Priya Shah", ongoing = true))
+        assertFalse(AlertMatcher.isStatus("Priya Shah", ongoing = false))
+        assertFalse(AlertMatcher.isStatus("Amazon.co.uk", ongoing = false))
     }
 }

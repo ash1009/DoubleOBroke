@@ -19,6 +19,16 @@ data class AppAlert(
  */
 object AlertMatcher {
 
+    /** What an email app's own status notifications start with ("Syncing mail", "Checking for mail", "Sending"). */
+    private val STATUS = Regex("""^\s*(syncing|checking for|sending|downloading|uploading)\b""", RegexOption.IGNORE_CASE)
+
+    /**
+     * Whether a notification from an email app is its own status (Gmail's "Syncing mail", say) rather than
+     * a new email. [ongoing] is a notification that can't be swiped away, or one showing progress: never
+     * an email.
+     */
+    fun isStatus(title: String, ongoing: Boolean): Boolean = ongoing || STATUS.containsMatchIn(title)
+
     data class Result(
         /** Notification keys to clear. */
         val clear: List<String>,

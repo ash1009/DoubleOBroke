@@ -86,7 +86,24 @@ object MailAppAlerts {
         return true
     }
 
+    /**
+     * Whether this email-app notification is a new email, not the app's own status (Gmail's "Syncing
+     * mail" while it checks in the background, a progress bar, sending): those are left alone.
+     */
+    fun isNewEmail(sbn: StatusBarNotification): Boolean {
+        val n = sbn.notification ?: return false
+        val e = n.extras ?: return false
+        val ongoing = sbn.isOngoing ||
+            n.flags and (Notification.FLAG_ONGOING_EVENT or Notification.FLAG_FOREGROUND_SERVICE) != 0 ||
+            n.category in setOf(Notification.CATEGORY_PROGRESS, Notification.CATEGORY_SERVICE, Notification.CATEGORY_STATUS, Notification.CATEGORY_SYSTEM) ||
+            e.getInt(Notification.EXTRA_PROGRESS_MAX, 0) > 0 ||
+            e.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE, false)
+        val title = e.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
+        return !app.brokeometer.mail.AlertMatcher.isStatus(title, ongoing)
+    }
+
     fun toAlert(sbn: StatusBarNotification): AppAlert? {
+        if (!isNewEmail(sbn)) return null
         val n = sbn.notification ?: return null
         val e = n.extras ?: return null
         val lines = e.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)?.joinToString(" ").orEmpty()

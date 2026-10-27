@@ -57,6 +57,8 @@ class PaymentListenerService : NotificationListenerService() {
         // A new email in an email app: the agent takes over. This notification is cleared straight away
         // and the app's own notification (if the email needs one) takes its place.
         if (fromMailApp) {
+            // The email app's own status (Gmail's "Syncing mail"), not an email: left alone.
+            if (!MailAppAlerts.isNewEmail(sbn)) return
             if (!replay) {
                 val hint = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString()?.trim()
                 val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
