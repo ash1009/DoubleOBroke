@@ -10,7 +10,7 @@ data class Balances(val bankMinor: Long, val oysterMinor: Long) {
 }
 
 /** A payment, as the balances see it: where it came from ("BANK", "TRAVEL", ...) and what really left. */
-data class BalancePayment(val source: String, val currency: String, val paidMinor: Long, val at: Long)
+data class BalancePayment(val source: String, val currency: String, val paidMinor: Long, val at: Long, val cash: Boolean = false)
 
 /**
  * Money that isn't a payment, as the balances see it. [paired] is a transfer seen at both banks,
@@ -32,6 +32,7 @@ object BalanceMath {
 
     const val BANK = "BANK"
     const val TRAVEL = "TRAVEL"
+    const val MANUAL = "MANUAL"
     const val IN = "IN"
     const val OUT = "OUT"
     const val TRANSFER = "TRANSFER"
@@ -45,6 +46,8 @@ object BalanceMath {
             when (p.source) {
                 BANK -> bank -= p.paidMinor
                 TRAVEL -> oyster -= p.paidMinor
+                // Added by hand or by voice: from the bank (it doesn't always send a notification), unless paid in cash.
+                MANUAL -> if (!p.cash) bank -= p.paidMinor
             }
         }
         for (m in moves) {

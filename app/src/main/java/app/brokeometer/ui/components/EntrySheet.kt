@@ -18,6 +18,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
@@ -28,12 +30,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import app.brokeometer.data.Catalog
 import app.brokeometer.data.TransactionEntity
+import app.brokeometer.data.TxSource
 import app.brokeometer.ui.theme.LocalBrand
 import app.brokeometer.util.Dates
 import app.brokeometer.util.Money
@@ -51,6 +55,8 @@ data class EntryDraft(
     val note: String,
     val currency: String = "GBP",
     val place: String = "",
+    /** Paid in cash, so it doesn't come off the bank balance. */
+    val cash: Boolean = false,
 )
 
 /** What a new entry starts with, for example what was understood from a spoken payment. */
@@ -95,6 +101,9 @@ fun EntrySheet(
     var categoryId by remember { mutableStateOf(catalog.categoryOfSub(entry?.subcategoryId ?: start?.subcategoryId)?.id) }
     var pickingDate by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var cash by remember { mutableStateOf(entry?.cash ?: false) }
+    // Only payments you add yourself can be cash: ones from the bank or trips are known.
+    val canBeCash = entry == null || entry.source == TxSource.MANUAL
 
     val amountMinor = Money.parseToMinor(amount)
     val canSave = amountMinor != null && subId != null
@@ -171,6 +180,23 @@ fun EntrySheet(
                 shape = MaterialTheme.shapes.medium,
                 modifier = Modifier.fillMaxWidth(),
             )
+            if (canBeCash) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                        Text("Paid in cash", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            if (cash) "Doesn't come off your bank balance." else "Comes off your bank balance.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = cash,
+                        onCheckedChange = { cash = it },
+                        colors = SwitchDefaults.colors(checkedTrackColor = LocalBrand.current.action, checkedThumbColor = LocalBrand.current.onAction),
+                    )
+                }
+            }
             Spacer(Modifier.height(4.dp))
             if (onTopUp != null) {
                 QuietButton(
@@ -208,7 +234,7 @@ fun EntrySheet(
                         val minor = amountMinor
                         val sub = subId
                         if (minor != null && sub != null) {
-                            close { onSave(EntryDraft(minor, label, date, sub, note, currency, start?.place.orEmpty())) }
+                            close { onSave(EntryDraft(minor, label, date, sub, note, currency, start?.place.orEmpty(), cash && canBeCash)) }
                         }
                     },
                 )

@@ -99,7 +99,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 val ids = moves.map { it.id }.toSet()
                 app.brokeometer.insights.BalanceMath.now(
                     start,
-                    payments.map { app.brokeometer.insights.BalancePayment(it.source, it.currency, it.paidMinor ?: it.amountMinor, it.occurredAt) },
+                    payments.map { app.brokeometer.insights.BalancePayment(it.source, it.currency, it.paidMinor ?: it.amountMinor, it.occurredAt, it.cash) },
                     moves.map {
                         app.brokeometer.insights.BalanceMove(it.direction, it.kind, it.currency, it.amountMinor, it.occurredAt, paired = it.pairId != null && it.pairId in ids)
                     },
@@ -295,6 +295,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         date: LocalDate,
         subcategoryId: Long,
         note: String,
+        cash: Boolean = original.cash,
     ) = viewModelScope.launch {
         val sameDay = Dates.localDate(original.occurredAt) == date
         val occurredAt = if (sameDay) original.occurredAt else Dates.middayMillis(date)
@@ -312,6 +313,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 status = TxStatus.CONFIRMED,
                 guessSource = if (categoryChanged) "USER" else original.guessSource,
                 note = note.trim(),
+                cash = cash && original.source == TxSource.MANUAL,
             )
         )
         notifier.cancel(original.id)
@@ -325,9 +327,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         note: String,
         currency: String = "GBP",
         place: String = "",
+        cash: Boolean = false,
     ) = viewModelScope.launch {
         val occurredAt = if (date == LocalDate.now()) System.currentTimeMillis() else Dates.middayMillis(date)
-        repository.addManual(amountMinor, label, occurredAt, subcategoryId, note, currency, place)
+        repository.addManual(amountMinor, label, occurredAt, subcategoryId, note, currency, place, cash)
     }
 
     // Adding by voice

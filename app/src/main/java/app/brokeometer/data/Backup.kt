@@ -123,6 +123,7 @@ object BackupCodec {
         putOpt("longitude", t.longitude)
         putOpt("locationAccuracy", t.locationAccuracy?.toDouble())
         putOpt("paidMinor", t.paidMinor)
+        if (t.cash) put("cash", true)
     }
 
     private fun moveJson(b: BackupMove): JSONObject = JSONObject().apply {
@@ -197,6 +198,7 @@ object BackupCodec {
                     longitude = t.doubleOrNull("longitude"),
                     locationAccuracy = t.doubleOrNull("locationAccuracy")?.toFloat(),
                     paidMinor = t.longOrNull("paidMinor"),
+                    cash = t.optBoolean("cash", false),
                 )
             }
             val moves = root.objects("moneyMoves").map { m ->

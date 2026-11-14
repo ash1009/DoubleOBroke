@@ -229,7 +229,11 @@ fun PaymentsScreen(vm: AppViewModel) {
                     EntryRow(
                         entry = entry,
                         catalog = catalog,
-                        detail = if (entry.source == TxSource.BANK) Dates.clock(entry.occurredAt) else "",
+                        detail = when {
+                            entry.source == TxSource.BANK -> Dates.clock(entry.occurredAt)
+                            entry.cash -> "Cash"
+                            else -> ""
+                        },
                         onClick = { editing = entry },
                     )
                 }
@@ -243,7 +247,7 @@ fun PaymentsScreen(vm: AppViewModel) {
             entry = open,
             catalog = catalog,
             onDismiss = { editing = null },
-            onSave = { d: EntryDraft -> vm.saveEntry(open, d.amountMinor, d.label, d.date, d.subcategoryId, d.note) },
+            onSave = { d: EntryDraft -> vm.saveEntry(open, d.amountMinor, d.label, d.date, d.subcategoryId, d.note, d.cash) },
             onDelete = { vm.deleteEntry(open.id) },
             onTopUp = { vm.oysterTopUp(open.id); Unit }.takeIf { open.source == TxSource.BANK && open.currency == "GBP" },
             onDeposit = { vm.deposit(open.id); Unit }.takeIf { open.source == TxSource.BANK },
@@ -257,7 +261,7 @@ fun PaymentsScreen(vm: AppViewModel) {
                 adding = false
                 start = null
             },
-            onSave = { d: EntryDraft -> vm.addEntry(d.amountMinor, d.label, d.date, d.subcategoryId, d.note, d.currency, d.place) },
+            onSave = { d: EntryDraft -> vm.addEntry(d.amountMinor, d.label, d.date, d.subcategoryId, d.note, d.currency, d.place, d.cash) },
             onDelete = null,
             start = start,
         )

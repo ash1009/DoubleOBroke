@@ -93,6 +93,11 @@ data class TransactionEntity(
      * so every total counts only that. Null when nothing was paid back.
      */
     val paidMinor: Long? = null,
+    /**
+     * Paid in cash: for a payment you added yourself, so it doesn't come off the bank balance. Ones you
+     * add yourself come off the bank otherwise, as the bank doesn't always send a notification.
+     */
+    val cash: Boolean = false,
 )
 
 /** Examples the app starts with: common shops, made up, until the owner's own choices take over. */

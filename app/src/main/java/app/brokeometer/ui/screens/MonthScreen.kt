@@ -205,7 +205,7 @@ fun MonthScreen(vm: AppViewModel) {
             entry = open,
             catalog = catalog,
             onDismiss = { editing = null },
-            onSave = { d: EntryDraft -> vm.saveEntry(open, d.amountMinor, d.label, d.date, d.subcategoryId, d.note) },
+            onSave = { d: EntryDraft -> vm.saveEntry(open, d.amountMinor, d.label, d.date, d.subcategoryId, d.note, d.cash) },
             onDelete = { vm.deleteEntry(open.id) },
             onTopUp = { vm.oysterTopUp(open.id); Unit }.takeIf { open.source == TxSource.BANK && open.currency == "GBP" },
             onDeposit = { vm.deposit(open.id); Unit }.takeIf { open.source == TxSource.BANK },

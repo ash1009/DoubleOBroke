@@ -7,7 +7,8 @@ class BalancesTest {
 
     private val start = BalanceStart(bankMinor = 100_000, oysterMinor = 2_000, at = 1_000L)
 
-    private fun pay(source: String, pence: Long, at: Long = 2_000L, currency: String = "GBP") = BalancePayment(source, currency, pence, at)
+    private fun pay(source: String, pence: Long, at: Long = 2_000L, currency: String = "GBP", cash: Boolean = false) =
+        BalancePayment(source, currency, pence, at, cash)
     private fun move(direction: String, kind: String, pence: Long, paired: Boolean = false, at: Long = 2_000L) =
         BalanceMove(direction, kind, "GBP", pence, at, paired)
 
@@ -48,10 +49,17 @@ class BalancesTest {
     fun onlyWhatHappenedAfterTheBalancesWereTypedCounts() {
         val b = BalanceMath.now(
             start,
-            listOf(pay("BANK", 1_000, at = 500L), pay("MANUAL", 700), pay("BANK", 900, currency = "EUR")),
+            listOf(pay("BANK", 1_000, at = 500L), pay("MANUAL", 700, at = 900L), pay("BANK", 900, currency = "EUR")),
             listOf(move("IN", "OTHER", 3_000, at = 1_000L)),
         )
         assertEquals(start.bankMinor, b.bankMinor)
+        assertEquals(start.oysterMinor, b.oysterMinor)
+    }
+
+    @Test
+    fun paymentsAddedByHandComeOffTheBankUnlessPaidInCash() {
+        val b = BalanceMath.now(start, listOf(pay("MANUAL", 23_960), pay("MANUAL", 450, cash = true), pay("IMPORT", 999)), emptyList())
+        assertEquals(76_040, b.bankMinor)
         assertEquals(start.oysterMinor, b.oysterMinor)
     }
 }

@@ -166,6 +166,7 @@ class Repository(private val db: AppDatabase) {
         note: String,
         currency: String = "GBP",
         place: String = "",
+        cash: Boolean = false,
     ): Long {
         ensureSeeded()
         val name = label.trim().ifEmpty { "Cash" }
@@ -188,6 +189,7 @@ class Repository(private val db: AppDatabase) {
                 guessConfidence = 1f,
                 note = note.trim(),
                 createdAt = System.currentTimeMillis(),
+                cash = cash,
             )
         )
     }
